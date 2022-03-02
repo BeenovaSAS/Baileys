@@ -3,7 +3,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   useSingleFileAuthState,
-} from "../src";
+} from "../index";
 
 // the store maintains the data of the WA connection in memory
 // can be written out to a file & read from it
@@ -16,7 +16,7 @@ export const connectToWhatsApp = async (req: any, res: any) => {
   const { id } = req.body;
 
   const { state, saveState } = useSingleFileAuthState(
-    `./sessions/auth_info_multi_${id}.json`
+    `../../sessions/auth_info_multi_${id}.json`
   );
 
   console.log(`using WA v${version.join(".")}, isLatest: ${isLatest}`);
