@@ -4,8 +4,10 @@ import * as fs from "fs";
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
+  makeWALegacySocket,
   useSingleFileAuthState,
 } from "../index";
+import { useSingleFileLegacyAuthState } from "../Utils";
 import { URL_RESPONSE } from "./constants";
 
 // the store maintains the data of the WA connection in memory
@@ -19,11 +21,11 @@ export const connectToWhatsApp = async (req: any, res: any) => {
   const { id } = req.body;
 
   let sendRes = false;
-  const { state, saveState } = useSingleFileAuthState(
-    `../../sessions/auth_info_multi_${id}.json`
+  const { state, saveState } = useSingleFileLegacyAuthState(
+    `../../sessions/auth_info_${id}.json`
   );
 
-  clients[id] = makeWASocket({
+  clients[id] = makeWALegacySocket({
     version,
     printQRInTerminal: true,
     auth: state,
@@ -124,13 +126,13 @@ export const loadSession = async (req: any, res: any) => {
 
   let sendRes = false;
 
-  const { state, saveState } = useSingleFileAuthState(
-    `../../sessions/auth_info_multi_${id}.json`
+  const { state, saveState } = useSingleFileLegacyAuthState(
+    `../../sessions/auth_info_${id}.json`
   );
 
   console.log(`using WA v${version.join(".")}, isLatest: ${isLatest}`);
 
-  clients[id] = makeWASocket({
+  clients[id] = makeWALegacySocket({
     version,
     auth: state,
   });

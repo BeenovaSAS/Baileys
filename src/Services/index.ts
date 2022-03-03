@@ -26,12 +26,17 @@ app.use(bodyParser.json());
 // app.post('/whatsapp/sendmessage', sendMessage)
 // app.post('/whatsapp/sendfile', upload.single('file'), sendFileMessage)
 
-import { connectToWhatsApp, sendMessage } from "./MultiDevice";
+import {
+  connectToWhatsApp,
+  sendMessage,
+  loadSession,
+  sendFileMessage,
+} from "./MultiDevice";
 
 app.post("/whatsapp/connect", connectToWhatsApp);
 app.post("/whatsapp/sendmessage", sendMessage);
-// app.post("/whatsapp/load_session", loadSession);
-// app.post("/whatsapp/sendfile", upload.single("file"), sendFileMessage);
+app.post("/whatsapp/load_session", loadSession);
+app.post("/whatsapp/sendfile", upload.single("file"), sendFileMessage);
 
 app.listen(4013, () => {
   console.log("conectado");
