@@ -1,11 +1,17 @@
 import bodyParser from 'body-parser'
+import * as dotenv from 'dotenv'
 import express from 'express'
+import path from 'path'
 
+
+console.log('HELLLO', path.join(__dirname, '../../.env'))
+
+
+dotenv.config({ path:path.join(__dirname, '../../.env') })
 const app = express()
 
 const router = express.Router()
 import multer from 'multer'
-import path from 'path'
 const storage = multer.diskStorage({
 	destination(req: any, file: any, cb: any) {
 		cb(null, 'uploads/')

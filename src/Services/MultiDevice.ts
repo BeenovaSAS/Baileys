@@ -8,7 +8,7 @@ import makeWASocket, {
 	useSingleFileAuthState,
 	useSingleFileLegacyAuthState
 } from '../index'
-import { URL_RESPONSE } from './constants'
+import endpoint from './endpoints.config'
 
 // the store maintains the data of the WA connection in memory
 // can be written out to a file & read from it
@@ -22,10 +22,7 @@ export const connectToWhatsApp = async(req: any, res: any) => {
 
 	const { id, multiDevice } = req.body
 
-	console.log(req.body)
-
 	if(conectionStatus[id]) {
-		console.log('cas')
 
 		return res.jsonp({ mensaje: 'Sesión cargada', name: 'whatsapp' })
 	}
@@ -98,7 +95,7 @@ export const connectToWhatsApp = async(req: any, res: any) => {
 
 			axios({
 				method: 'POST',
-				url: `${URL_RESPONSE}/whatsapp/save`,
+				url: `${endpoint.URL_RESPONSE}/whatsapp/save`,
 				headers: {
 					'Content-Type': 'application/json',
 				},
