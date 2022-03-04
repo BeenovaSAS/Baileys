@@ -18,11 +18,15 @@ const conectionStatus = []
 // start a connection
 export const connectToWhatsApp = async(req: any, res: any) => {
 	// fetch latest version of WA Web
-	const { version, isLatest } = await fetchLatestBaileysVersion()
+	const { version } = await fetchLatestBaileysVersion()
 
 	const { id, multiDevice } = req.body
 
+	console.log(req.body)
+
 	if(conectionStatus[id]) {
+		console.log('cas')
+
 		return res.jsonp({ mensaje: 'Sesión cargada', name: 'whatsapp' })
 	}
 
@@ -88,8 +92,8 @@ export const connectToWhatsApp = async(req: any, res: any) => {
 			const body = {
 				id,
 				request: req.body,
-				multi_device:true,
-				user: { ...clients[id].user, multi_device: true },
+				multi_device:multiDevice,
+				user: { ...clients[id].user, multi_device:multiDevice },
 			}
 
 			axios({

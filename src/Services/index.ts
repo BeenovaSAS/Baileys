@@ -19,8 +19,6 @@ const upload = multer({ dest: 'uploads/' })
 
 app.use(bodyParser.json())
 
-// import { conectApi, loadSession, sendFileMessage, sendMessage } from './v4'
-
 
 import {
 	connectToWhatsApp,
