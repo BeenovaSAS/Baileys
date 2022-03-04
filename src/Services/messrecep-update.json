@@ -1,0 +1,50 @@
+{
+  "chats": [
+    {
+      "id": "573135519620@s.whatsapp.net",
+      "conversationTimestamp": 1646360991,
+      "unreadCount": 3,
+      "mute": 0,
+      "notSpam": true,
+      "name": "Carlos Mario Jaramillo"
+    },
+    {
+      "id": "3135519620@s.whatsapp.net",
+      "conversationTimestamp": 1646354170,
+      "unreadCount": 0,
+      "mute": 0,
+      "notSpam": true
+    },
+    {
+      "id": "573137987478@s.whatsapp.net",
+      "conversationTimestamp": 1646095573,
+      "unreadCount": 0,
+      "mute": 0,
+      "notSpam": true
+    },
+    {
+      "id": "57573135519620@s.whatsapp.net",
+      "conversationTimestamp": 1646359825,
+      "unreadCount": 0,
+      "mute": 0,
+      "notSpam": true
+    },
+    {
+      "id": "573133569324@s.whatsapp.net",
+      "conversationTimestamp": 1646256983,
+      "unreadCount": 0,
+      "mute": 0,
+      "notSpam": true,
+      "name": "Jhonny"
+    },
+    {
+      "id": "573004974588@s.whatsapp.net",
+      "conversationTimestamp": 1646094912,
+      "unreadCount": 0,
+      "mute": 0,
+      "notSpam": true,
+      "name": "Sneyder Tienda Animal"
+    }
+  ],
+  "isLatest": true
+}

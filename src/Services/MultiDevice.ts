@@ -4,54 +4,87 @@ import * as fs from 'fs'
 import makeWASocket, {
 	DisconnectReason,
 	fetchLatestBaileysVersion,
+	makeWALegacySocket,
 	useSingleFileAuthState,
+	useSingleFileLegacyAuthState
 } from '../index'
 import { URL_RESPONSE } from './constants'
 
 // the store maintains the data of the WA connection in memory
 // can be written out to a file & read from it
 const clients = []
+
+const conectionStatus = []
 // start a connection
 export const connectToWhatsApp = async(req: any, res: any) => {
 	// fetch latest version of WA Web
 	const { version, isLatest } = await fetchLatestBaileysVersion()
 
-	const { id } = req.body
+	const { id, multiDevice } = req.body
+
+	if(conectionStatus[id]) {
+		return res.jsonp({ mensaje: 'Sesión cargada', name: 'whatsapp' })
+	}
 
 	let sendRes = false
-	const { state, saveState } = useSingleFileAuthState(
-		`../../sessions/auth_info_multi_${id}.json`
-	)
 
-	clients[id] = makeWASocket({
-		version,
-		printQRInTerminal: true,
-		auth: state,
-	})
+
+	if(multiDevice) {
+		const { state, saveState } = useSingleFileAuthState(
+			`../../sessions/auth_info_multi_${id}.json`
+		)
+
+		clients[id] = makeWASocket({
+			version,
+			printQRInTerminal: true,
+			auth: state,
+		})
+		clients[id].ev.on('creds.update', saveState)
+
+	} else {
+		const { state, saveState } = useSingleFileLegacyAuthState(
+			`../../sessions/auth_info_legacy_${id}.json`
+
+		)
+
+		clients[id] = makeWALegacySocket({
+			version,
+			printQRInTerminal: true,
+			auth: state,
+		})
+		clients[id].ev.on('creds.update', saveState)
+
+
+	}
+
 
 	clients[id].ev.on('connection.update', async(update) => {
 		const { connection, lastDisconnect } = update
 		if(connection === 'close') {
-			// reconnect if not logged out
-			if(
-				(lastDisconnect.error as Boom)?.output?.statusCode !==
-        DisconnectReason.loggedOut
-			) {
+			conectionStatus[id] = false
+
+			console.log('Status code .....', (lastDisconnect?.error as Boom)?.output?.statusCode)
+
+			switch ((lastDisconnect?.error as Boom)?.output?.statusCode) {
+			case DisconnectReason.restartRequired:
 				connectToWhatsApp(req, res)
-			} else {
-				console.log('connection closed')
-				try {
-					fs.unlinkSync(`../../sessions/auth_info_multi_${id}.json`)
-					//file removed
-				} catch(err) {
-					console.error('Error eliminado el archivo', id)
-				}
+				break
+			case DisconnectReason.timedOut:
+				return res.status(400).jsonp({ mensaje: 'Tiempo de espera agotado', name: 'whatsapp' })
+				break
+			case DisconnectReason.loggedOut:
+				console.log('Eliminando el archivo')
+				await closeSession(id, multiDevice)
+				break
+			default:
+				break
 			}
+
+
 		}
 
-		if(connection === 'open' && !sendRes) {
-			sendRes = true
-
+		if(connection === 'open') {
+			conectionStatus[id] = true
 			const body = {
 				id,
 				request: req.body,
@@ -70,7 +103,10 @@ export const connectToWhatsApp = async(req: any, res: any) => {
 				console.log(err)
 			})
 
-			res.jsonp({ mensaje: 'Sesión cargada', name: 'whatsapp' })
+			if(!sendRes) {
+				sendRes = true
+				res.jsonp({ mensaje: 'Sesión cargada', name: 'whatsapp' })
+			}
 		}
 
 		if(update?.qr && !sendRes) {
@@ -79,7 +115,6 @@ export const connectToWhatsApp = async(req: any, res: any) => {
 		}
 	})
 	// listen for when the auth credentials is updated
-	clients[id].ev.on('creds.update', saveState)
 }
 
 export const sendMessage = async(req: any, res: any) => {
@@ -98,7 +133,6 @@ export const sendMessage = async(req: any, res: any) => {
 
 export const sendFileMessage = async(req: any, res: any) => {
 	const { id, phone } = req.body
-	// send a simple text!
 
 	if(!req.file) {
 		return res.status(401).jsonp({ mensaje: 'El archivo es obligatorio' })
@@ -108,53 +142,22 @@ export const sendFileMessage = async(req: any, res: any) => {
 
 	try {
 		await clients[id].sendMessage(phoneDest, {
-			document: { url: req.file.path },
+			document: { url: req.file.path, fileName:'Formula' },
 		})
 	} catch(err) {
-		res.jsonp({ status: 400, error: 'Error enviando el mensaje' })
+	 return	res.jsonp({ status: 400, error: 'Error enviando el mensaje' })
 	}
 
-	res.jsonp({ status: 200, mensaje: 'Notificación enviada' })
+	return res.jsonp({ status: 200, mensaje: 'Notificación enviada' })
 }
 
-export const loadSession = async(req: any, res: any) => {
-	// fetch latest version of WA Web
-	const { version, isLatest } = await fetchLatestBaileysVersion()
 
-	const { id } = req.body
+const closeSession = async(id, multiDevice) => {
+	try {
 
-	let sendRes = false
-
-	const { state, saveState } = useSingleFileAuthState(
-		`../../sessions/auth_info_multi_${id}.json`
-	)
-
-	console.log(`using WA v${version.join('.')}, isLatest: ${isLatest}`)
-
-	clients[id] = makeWASocket({
-		version,
-		auth: state,
-	})
-
-	clients[id].ev.on('connection.update', async(update) => {
-		const { connection, lastDisconnect } = update
-		if(connection === 'close') {
-			// reconnect if not logged out
-			if(
-				(lastDisconnect.error as Boom)?.output?.statusCode !==
-        DisconnectReason.loggedOut
-			) {
-				loadSession(req, res)
-			} else {
-				console.log('connection closed')
-			}
-		}
-
-		if(connection === 'open' && !sendRes) {
-			sendRes = true
-			res.jsonp({ mensaje: 'Sesión cargada', name: 'whatsapp' })
-		}
-	})
-	// listen for when the auth credentials is updated
-	clients[id].ev.on('creds.update', saveState)
+		fs.unlinkSync(`../../sessions/auth_info_${multiDevice ? 'multi' : 'legacy'}_${id}.json`)
+		//file removed
+	} catch(err) {
+		console.error('Error eliminado el archivo', id)
+	}
 }
