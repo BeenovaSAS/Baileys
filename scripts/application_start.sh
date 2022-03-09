@@ -8,7 +8,6 @@ cd /home/ubuntu/Dogtorsoftware/Baileys
 
 #install node modules
 npm install
-npm start prepare
 
 #start our node app in the backgroun
 pm2 restart baileys
