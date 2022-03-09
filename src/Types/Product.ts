@@ -1,3 +1,4 @@
+import { WAMediaUpload } from './Message'
 
 export type CatalogResult = {
 	data: {
@@ -8,6 +9,19 @@ export type CatalogResult = {
 
 export type ProductCreateResult = {
 	data: { product: any }
+}
+
+export type CatalogStatus = {
+	status: string
+	canAppeal: boolean
+}
+
+export type CatalogCollection = {
+	id: string
+	name: string
+	products: Product[]
+
+	status: CatalogStatus
 }
 
 export type ProductAvailability = 'in stock'
@@ -25,8 +39,8 @@ export type ProductBase = {
 export type ProductCreate = ProductBase & {
 	/** ISO country code for product origin. Set to undefined for no country */
 	originCountryCode: string | undefined
-
-	imageUrls: string[]
+	/** images of the product */
+	images: WAMediaUpload[]
 }
 
 export type ProductUpdate = Omit<ProductCreate, 'originCountryCode'>
@@ -36,4 +50,24 @@ export type Product = ProductBase & {
 	imageUrls: { [_: string]: string }
 	reviewStatus: { [_: string]: string }
 	availability: ProductAvailability
+}
+
+export type OrderPrice = {
+	currency: string
+	total: number
+}
+
+export type OrderProduct = {
+	id: string
+	imageUrl: string
+	name: string
+	quantity: number
+
+	currency: string
+	price: number
+}
+
+export type OrderDetails = {
+	price: OrderPrice
+	products: OrderProduct[]
 }

@@ -15,7 +15,7 @@
 
 ## Example
 
-Do check out & run [example.ts](Example/example.ts) to see example usage of the library.
+Do check out & run [example.ts](https://github.com/adiwajshing/Baileys/blob/master/Example/example.ts) to see example usage of the library.
 The script covers most common use cases.
 To run the example script, download or clone the repo and then type the following in terminal:
 1. ``` cd path/to/Baileys ```
@@ -487,7 +487,7 @@ const sendMsg = await sock.sendMessage(id, templateMessage)
         mimetype: Mimetype.pdf, /* (for media messages) specify the type of media (optional for all media types except documents),
                                     import {Mimetype} from '@adiwajshing/baileys'
                                 */
-        filename: 'somefile.pdf', // (for media messages) file name for the media
+        fileName: 'somefile.pdf', // (for media messages) file name for the media
         /* will send audio messages as voice notes, if set to true */
         ptt: true,
         // will detect links & generate a link preview automatically (default true)

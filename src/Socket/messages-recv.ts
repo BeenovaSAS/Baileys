@@ -2,26 +2,11 @@
 import { proto } from '../../WAProto'
 import { KEY_BUNDLE_TYPE } from '../Defaults'
 import { Chat, GroupMetadata, MessageUserReceipt, ParticipantAction, SocketConfig, WAMessageStubType } from '../Types'
-import { decodeMessageStanza, downloadAndProcessHistorySyncNotification, encodeBigEndian, generateSignalPubKey, toNumber, xmppPreKey, xmppSignedPreKey } from '../Utils'
+import { decodeMessageStanza, downloadAndProcessHistorySyncNotification, encodeBigEndian, generateSignalPubKey, normalizeMessageContent, toNumber, xmppPreKey, xmppSignedPreKey } from '../Utils'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
 import { areJidsSameUser, BinaryNode, BinaryNodeAttributes, getAllBinaryNodeChildren, getBinaryNodeChildren, isJidGroup, jidDecode, jidEncode, jidNormalizedUser } from '../WABinary'
 import { makeChatsSocket } from './chats'
 import { extractGroupMetadata } from './groups'
-
-const STATUS_MAP: { [_: string]: proto.WebMessageInfo.WebMessageInfoStatus } = {
-	'played': proto.WebMessageInfo.WebMessageInfoStatus.PLAYED,
-	'read': proto.WebMessageInfo.WebMessageInfoStatus.READ,
-	'read-self': proto.WebMessageInfo.WebMessageInfoStatus.READ
-}
-
-const getStatusFromReceiptType = (type: string | undefined) => {
-	const status = STATUS_MAP[type]
-	if(typeof type === 'undefined') {
-		return proto.WebMessageInfo.WebMessageInfoStatus.DELIVERY_ACK
-	}
-
-	return status
-}
 
 export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	const { logger } = config
@@ -140,7 +125,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	}
 
 	const processMessage = async(message: proto.IWebMessageInfo, chatUpdate: Partial<Chat>) => {
-		const protocolMsg = message.message?.protocolMessage
+		const content = normalizeMessageContent(message.message)
+		const protocolMsg = content?.protocolMessage
 		if(protocolMsg) {
 			switch (protocolMsg.type) {
 			case proto.ProtocolMessage.ProtocolMessageType.HISTORY_SYNC_NOTIFICATION:
@@ -171,6 +157,10 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					ev.emit('contacts.set', { contacts })
 				}
 
+				if(isLatest) {
+					resyncMainAppState()
+				}
+
 				break
 			case proto.ProtocolMessage.ProtocolMessageType.APP_STATE_SYNC_KEY_SHARE:
 				const keys = protocolMsg.appStateSyncKeyShare!.keys
@@ -186,8 +176,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					}
 
 					ev.emit('creds.update', { myAppStateKeyId: newAppStateSyncKeyId })
-
-					resyncMainAppState()
 				} else {
 					logger.info({ protocolMsg }, 'recv app state sync with 0 keys')
 				}
@@ -570,4 +558,19 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	})
 
 	return { ...sock, processMessage, sendMessageAck, sendRetryRequest }
+}
+
+const STATUS_MAP: { [_: string]: proto.WebMessageInfo.WebMessageInfoStatus } = {
+	'played': proto.WebMessageInfo.WebMessageInfoStatus.PLAYED,
+	'read': proto.WebMessageInfo.WebMessageInfoStatus.READ,
+	'read-self': proto.WebMessageInfo.WebMessageInfoStatus.READ
+}
+
+const getStatusFromReceiptType = (type: string | undefined) => {
+	const status = STATUS_MAP[type]
+	if(typeof type === 'undefined') {
+		return proto.WebMessageInfo.WebMessageInfoStatus.DELIVERY_ACK
+	}
+
+	return status
 }
