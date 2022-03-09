@@ -77,6 +77,20 @@ export const connectToWhatsApp = async(req: any, res: any) => {
 				console.log('Eliminando el archivo')
 				await closeSession(id, multiDevice)
 				break
+			case DisconnectReason.multideviceMismatch:
+				axios({
+					method: 'POST',
+					url: `${endpoint.URL_RESPONSE}/whatsapp/retry`,
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					data:{
+						id
+					}
+				}).catch((err) => {
+					console.log(err)
+				})
+				break
 			default:
 				break
 			}

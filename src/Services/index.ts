@@ -4,9 +4,6 @@ import express from 'express'
 import path from 'path'
 
 
-console.log('HELLLO', path.join(__dirname, '../../.env'))
-
-
 dotenv.config({ path:path.join(__dirname, '../../.env') })
 const app = express()
 
