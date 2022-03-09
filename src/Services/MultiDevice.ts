@@ -100,6 +100,9 @@ export const connectToWhatsApp = async(req: any, res: any) => {
 
 		if(connection === 'open') {
 			conectionStatus[id] = true
+
+			console.log(clients[id].user)
+
 			const body = {
 				id,
 				request: req.body,
