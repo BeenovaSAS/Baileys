@@ -22,6 +22,9 @@ export const connectToWhatsApp = async(req: any, res: any) => {
 
 	const { id, multiDevice } = req.body
 
+	console.error('SOy multi device ---------------------------------', multiDevice)
+	console.error('Conectio status ---------------------------------', conectionStatus[id])
+
 	if(conectionStatus[id]) {
 
 		return res.jsonp({ mensaje: 'Sesión cargada', name: 'whatsapp' })
