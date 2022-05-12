@@ -124,6 +124,8 @@ type SocketConfig = {
 	fetchAgent?: Agent
     /** should the QR be printed in the terminal */
     printQRInTerminal: boolean
+    /** fires a conversationTimestamp & read count update on CIPHERTEXT messages */
+    treatCiphertextMessagesAsReal: boolean
     /** 
      * fetch a message from your store 
      * implement this so that messages failed to send (solves the "this message can take a while" issue) can be retried
@@ -146,9 +148,9 @@ import * as fs from 'fs'
 const { state, saveState } = useSingleFileAuthState('./auth_info_multi.json')
 // will use the given state to connect
 // so if valid credentials are available -- it'll connect without QR
-const conn = makeSocket({ auth: state }) 
+const conn = makeWASocket({ auth: state }) 
 // this will be called as soon as the credentials are updated
-sock.ev.on ('creds.update', saveState)
+conn.ev.on ('creds.update', saveState)
 ```
 
 **Note**: When a message is received/sent, due to signal sessions needing updating, the auth keys (`authState.keys`) will update. Whenever that happens, you must save the updated keys. Not doing so will prevent your messages from reaching the recipient & other unexpected consequences. The `useSingleFileAuthState` function automatically takes care of that, but for any other serious implementation -- you will need to be very careful with the key state management.
@@ -187,7 +189,7 @@ The events are typed up in a type map, as mentioned here:
 
 export type BaileysEventMap = {
     /** connection state has been updated -- WS closed, opened, connecting etc. */
-	'connection.update': Partial<ConnectionState>
+    'connection.update': Partial<ConnectionState>
     /** auth credentials updated -- some pre key state, device ID etc. */
     'creds.update': Partial<AuthenticationCreds>
     /** set chats (history sync), chats are reverse chronologically sorted */
@@ -224,6 +226,8 @@ export type BaileysEventMap = {
 
     'blocklist.set': { blocklist: string[] }
     'blocklist.update': { blocklist: string[], type: 'add' | 'remove' }
+    /** Receive an update on a call, including when the call was received, rejected, accepted */
+    'call': WACallEvent[]
 }
 ```
 
@@ -316,6 +320,10 @@ import { MessageType, MessageOptions, Mimetype } from '@adiwajshing/baileys'
 const id = 'abcd@s.whatsapp.net' // the WhatsApp ID 
 // send a simple text!
 const sentMsg  = await sock.sendMessage(id, { text: 'oh hello there' })
+// send a reply messagge
+const sentMsg  = await sock.sendMessage(id, { text: 'oh hello there' }, { quoted: message })
+// send a mentions message
+const sentMsg  = await sock.sendMessage(id, { text: '@12345678901', mentions: ['12345678901@s.whatsapp.net'] })
 // send a location!
 const sentMsg  = await sock.sendMessage(
     id, 
@@ -396,6 +404,26 @@ const listMessage = {
 }
 
 const sendMsg = await sock.sendMessage(id, listMessage)
+
+const reactionMessage = {
+    react: {
+        text: "💖",
+        key: message.key
+    }
+}
+
+const sendMsg = await sock.sendMessage(id, reactionMessage)
+```
+
+### Sending messages with link previews
+
+1. By default, WA MD does not seem to have link generation when sent from the web
+2. Baileys has an extra function to help generate the content for these link previews
+3. To enable this function's usage, add `link-preview-js` as a dependency to your project with `yarn add link-preview-js`
+4. Send a link:
+``` ts
+// send a link
+const sentMsg  = await sock.sendMessage(id, { text: 'Hi, this was sent using https://github.com/adiwajshing/baileys' })
 ```
 
 ### Media Messages
@@ -442,7 +470,7 @@ const buttons = [
 const buttonMessage = {
     image: {url: 'https://example.com/image.jpeg'},
     caption: "Hi it's button message",
-    footerText: 'Hello World',
+    footer: 'Hello World',
     buttons: buttons,
     headerType: 4
 }
@@ -459,7 +487,7 @@ const templateButtons = [
 const buttonMessage = {
     text: "Hi it's a template message",
     footer: 'Hello World',
-    templateButtons: templateButttons,
+    templateButtons: templateButtons,
     image: {url: 'https://example.com/image.jpeg'}
 }
 
@@ -480,7 +508,7 @@ const sendMsg = await sock.sendMessage(id, templateMessage)
         contextInfo: { forwardingScore: 2, isForwarded: true }, // some random context info (can show a forwarded message with this too)
         timestamp: Date(), // optional, if you want to manually set the timestamp of the message
         caption: "hello there!", // (for media messages) the caption to send with the media (cannot be sent with stickers though)
-        thumbnail: "23GD#4/==", /*  (for location & media messages) has to be a base 64 encoded JPEG if you want to send a custom thumb, 
+        jpegThumbnail: "23GD#4/==", /*  (for location & media messages) has to be a base 64 encoded JPEG if you want to send a custom thumb, 
                                     or set to null if you don't want to send a thumbnail.
                                     Do not enter this field if you want to automatically generate a thumb
                                 */
@@ -506,16 +534,19 @@ await sock.sendMessage('1234@s.whatsapp.net', { forward: msg }) // WA forward th
 
 ## Reading Messages
 
-A set of message IDs must be explicitly marked read now. 
-Cannot mark an entire "chat" read as it were with Baileys Web.
+A set of message keys must be explicitly marked read now. 
+In multi-device, you cannot mark an entire "chat" read as it were with Baileys Web.
 This does mean you have to keep track of unread messages.
 
-``` ts 
-const id = '1234-123@g.us'
-const messageID = 'AHASHH123123AHGA' // id of the message you want to read
-const participant = '912121232@s.whatsapp.net' // the ID of the user that sent the message (undefined for individual chats)
-
-await sock.sendReadReceipt(id, participant, [messageID])
+``` ts
+const key = {
+    remoteJid: '1234-123@g.us',
+    id: 'AHASHH123123AHGA', // id of the message you want to read
+    participant: '912121232@s.whatsapp.net' // the ID of the user that sent the  message (undefined for individual chats)
+}
+// pass to readMessages function
+// can pass multiple keys to read multiple messages as well
+await sock.readMessages([key])
 ```
 
 The message ID is the unique identifier of the message that you are marking as read. On a `WAMessage`, the `messageID` can be accessed using ```messageID = message.key.id```.
@@ -701,6 +732,8 @@ Of course, replace ``` xyz ``` with an actual ID.
     ``` ts
     // only allow admins to send messages
     await sock.groupSettingUpdate("abcd-xyz@g.us", 'announcement')
+    // allow everyone to send messages
+    await sock.groupSettingUpdate("abcd-xyz@g.us", 'not_announcement')
     // allow everyone to modify the group's settings -- like display picture etc.
     await sock.groupSettingUpdate("abcd-xyz@g.us", 'unlocked')
     // only allow admins to modify the group's settings
@@ -732,6 +765,13 @@ Of course, replace ``` xyz ``` with an actual ID.
     ```
     Of course, replace ``` xxx ``` with invitation code.
 
+
+- To join the group using groupInviteMessage
+    ``` ts
+    const response = await sock.groupAcceptInviteV4(groupInviteMessage)
+    console.log("joined to: " + response)
+    ```
+  Of course, replace ``` xxx ``` with invitation code.
 ## Broadcast Lists & Stories
 
 **Note:** messages cannot be sent to broadcast lists from the MD version right now

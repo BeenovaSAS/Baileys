@@ -1,7 +1,8 @@
 import { Boom } from '@hapi/boom'
+import type { Logger } from 'pino'
 import { proto } from '../../WAProto'
-import { ChatModification, ChatMutation, LastMessageList, LTHashState, WAPatchCreate, WAPatchName } from '../Types'
-import { BinaryNode, getBinaryNodeChild, getBinaryNodeChildren } from '../WABinary'
+import { AuthenticationCreds, BaileysEventMap, Chat, ChatModification, ChatMutation, Contact, LastMessageList, LTHashState, WAPatchCreate, WAPatchName } from '../Types'
+import { BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, isJidGroup, jidNormalizedUser } from '../WABinary'
 import { aesDecrypt, aesEncrypt, hkdf, hmacSign } from './crypto'
 import { toNumber } from './generics'
 import { LT_HASH_ANTI_TAMPERING } from './lt-hash'
@@ -446,19 +447,38 @@ export const chatModificationToAppPatch = (
 ) => {
 	const OP = proto.SyncdMutation.SyncdMutationSyncdOperation
 	const getMessageRange = (lastMessages: LastMessageList) => {
-		if(!lastMessages?.length) {
-			throw new Boom('Expected last message to be not from me', { statusCode: 400 })
+		let messageRange: proto.ISyncActionMessageRange
+		if(Array.isArray(lastMessages)) {
+			const lastMsg = lastMessages[lastMessages.length - 1]
+			messageRange = {
+				lastMessageTimestamp: lastMsg?.messageTimestamp,
+				messages: lastMessages?.length ? lastMessages.map(
+					m => {
+						if(!m.key?.id || !m.key?.remoteJid) {
+							throw new Boom('Incomplete key', { statusCode: 400, data: m })
+						}
+
+						if(isJidGroup(m.key.remoteJid) && !m.key.fromMe && !m.key.participant) {
+							throw new Boom('Expected not from me message to have participant', { statusCode: 400, data: m })
+						}
+
+						if(!m.messageTimestamp || !toNumber(m.messageTimestamp)) {
+							throw new Boom('Missing timestamp in last message list', { statusCode: 400, data: m })
+						}
+
+						if(m.key.participant) {
+							m.key = { ...m.key }
+							m.key.participant = jidNormalizedUser(m.key.participant)
+						}
+
+						return m
+					}
+				) : undefined
+			}
+		} else {
+			messageRange = lastMessages
 		}
 
-		const lastMsg = lastMessages[lastMessages.length - 1]
-		if(lastMsg.key.fromMe) {
-			throw new Boom('Expected last message in array to be not from me', { statusCode: 400 })
-		}
-
-		const messageRange: proto.ISyncActionMessageRange = {
-			lastMessageTimestamp: lastMsg?.messageTimestamp,
-			messages: lastMessages
-		}
 		return messageRange
 	}
 
@@ -538,4 +558,75 @@ export const chatModificationToAppPatch = (
 	patch.syncAction.timestamp = Date.now()
 
 	return patch
+}
+
+export const processSyncActions = (
+	actions: ChatMutation[],
+	me: Contact,
+	logger?: Logger
+) => {
+	const map: Partial<BaileysEventMap<AuthenticationCreds>> = { }
+	const updates: { [jid: string]: Partial<Chat> } = {}
+	const contactUpdates: { [jid: string]: Contact } = {}
+	const msgDeletes: proto.IMessageKey[] = []
+
+	for(const { syncAction: { value: action }, index: [_, id, msgId, fromMe] } of actions) {
+		const update: Partial<Chat> = { id }
+		if(action?.muteAction) {
+			update.mute = action.muteAction?.muted ?
+				toNumber(action.muteAction!.muteEndTimestamp!) :
+				undefined
+		} else if(action?.archiveChatAction) {
+			update.archive = !!action.archiveChatAction?.archived
+		} else if(action?.markChatAsReadAction) {
+			update.unreadCount = !!action.markChatAsReadAction?.read ? 0 : -1
+		} else if(action?.clearChatAction) {
+			msgDeletes.push({
+				remoteJid: id,
+				id: msgId,
+				fromMe: fromMe === '1'
+			})
+		} else if(action?.contactAction) {
+			contactUpdates[id] = {
+				...(contactUpdates[id] || {}),
+				id,
+				name: action.contactAction!.fullName
+			}
+		} else if(action?.pushNameSetting) {
+			if(me?.name !== action?.pushNameSetting) {
+				map['creds.update'] = map['creds.update'] || { }
+				map['creds.update'].me = { ...me, name: action?.pushNameSetting?.name! }
+			}
+		} else if(action?.pinAction) {
+			update.pin = action.pinAction?.pinned ? toNumber(action.timestamp) : null
+		} else if(action?.unarchiveChatsSetting) {
+			map['creds.update'] = map['creds.update'] || { }
+			map['creds.update'].accountSettings = { unarchiveChats: !!action.unarchiveChatsSetting.unarchiveChats }
+
+			logger.info(`archive setting updated => '${action.unarchiveChatsSetting.unarchiveChats}'`)
+		} else {
+			logger.warn({ action, id }, 'unprocessable update')
+		}
+
+		if(Object.keys(update).length > 1) {
+			updates[update.id] = {
+				...(updates[update.id] || {}),
+				...update
+			}
+		}
+	}
+
+	if(Object.values(updates).length) {
+		map['chats.update'] = Object.values(updates)
+	}
+
+	if(Object.values(contactUpdates).length) {
+		map['contacts.upsert'] = Object.values(contactUpdates)
+	}
+
+	if(msgDeletes.length) {
+		map['messages.delete'] = { keys: msgDeletes }
+	}
+
+	return map
 }

@@ -23,8 +23,7 @@ export const connectToWhatsApp = async(req: any, res: any) => {
 	const { id, multiDevice } = req.body
 
 	console.error('SOy multi device ---------------------------------', multiDevice)
-	console.error('Conectio status ---------------------------------', conectionStatus[id])
-	console.log('SOCKET ---------------------------------', clients[id])
+	console.error('Conection status ---------------------------------', conectionStatus[id])
 
 	if(conectionStatus[id]) {
 
