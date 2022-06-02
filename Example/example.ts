@@ -1,5 +1,5 @@
 import { Boom } from '@hapi/boom'
-import makeWASocket, { AnyMessageContent, delay, DisconnectReason, fetchLatestBaileysVersion, makeInMemoryStore, MessageRetryMap, useSingleFileAuthState } from '../src'
+import makeWASocket, { AnyMessageContent, delay, DisconnectReason, fetchLatestBaileysVersion, makeInMemoryStore, MessageRetryMap, useMultiFileAuthState } from '../src'
 import MAIN_LOGGER from '../src/Utils/logger'
 
 const logger = MAIN_LOGGER.child({ })
@@ -21,10 +21,9 @@ setInterval(() => {
 	store?.writeToFile('./baileys_store_multi.json')
 }, 10_000)
 
-const { state, saveState } = useSingleFileAuthState('./auth_info_multi.json')
-
 // start a connection
 const startSock = async() => {
+	const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info')
 	// fetch latest version of WA Web
 	const { version, isLatest } = await fetchLatestBaileysVersion()
 	console.log(`using WA v${version.join('.')}, isLatest: ${isLatest}`)
@@ -78,6 +77,7 @@ const startSock = async() => {
 	sock.ev.on('message-receipt.update', m => console.log(m))
 	sock.ev.on('presence.update', m => console.log(m))
 	sock.ev.on('chats.update', m => console.log(m))
+	sock.ev.on('chats.delete', m => console.log(m))
 	sock.ev.on('contacts.upsert', m => console.log(m))
 
 	sock.ev.on('connection.update', (update) => {
@@ -94,7 +94,7 @@ const startSock = async() => {
 		console.log('connection update', update)
 	})
 	// listen for when the auth credentials is updated
-	sock.ev.on('creds.update', saveState)
+	sock.ev.on('creds.update', saveCreds)
 
 	return sock
 }

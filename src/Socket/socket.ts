@@ -5,7 +5,7 @@ import WebSocket from 'ws'
 import { proto } from '../../WAProto'
 import { DEF_CALLBACK_PREFIX, DEF_TAG_PREFIX, DEFAULT_ORIGIN, INITIAL_PREKEY_COUNT, MIN_PREKEY_COUNT } from '../Defaults'
 import { AuthenticationCreds, BaileysEventEmitter, BaileysEventMap, DisconnectReason, SocketConfig } from '../Types'
-import { addTransactionCapability, bindWaitForConnectionUpdate, configureSuccessfulPairing, Curve, generateLoginNode, generateMdTagPrefix, generateRegistrationNode, getErrorCodeFromStreamError, getNextPreKeysNode, makeNoiseHandler, printQRIfNecessaryListener, promiseTimeout, useSingleFileAuthState } from '../Utils'
+import { addTransactionCapability, bindWaitForConnectionUpdate, configureSuccessfulPairing, Curve, generateLoginNode, generateMdTagPrefix, generateRegistrationNode, getErrorCodeFromStreamError, getNextPreKeysNode, makeNoiseHandler, printQRIfNecessaryListener, promiseTimeout } from '../Utils'
 import { assertNodeErrorFree, BinaryNode, encodeBinaryNode, getBinaryNodeChild, getBinaryNodeChildren, S_WHATSAPP_NET } from '../WABinary'
 
 /**
@@ -22,9 +22,10 @@ export const makeSocket = ({
 	keepAliveIntervalMs,
 	version,
 	browser,
-	auth: initialAuthState,
+	auth: authState,
 	printQRInTerminal,
-	defaultQueryTimeoutMs
+	defaultQueryTimeoutMs,
+	transactionOpts
 }: SocketConfig) => {
 	const ws = new WebSocket(waWebSocketUrl, undefined, {
 		origin: DEFAULT_ORIGIN,
@@ -38,20 +39,10 @@ export const makeSocket = ({
 	const ephemeralKeyPair = Curve.generateKeyPair()
 	/** WA noise protocol wrapper */
 	const noise = makeNoiseHandler(ephemeralKeyPair, logger)
-	let authState = initialAuthState
-	if(!authState) {
-		authState = useSingleFileAuthState('./auth-info-multi.json').state
-
-		logger.warn(`
-            Baileys just created a single file state for your credentials. 
-            This will not be supported soon.
-            Please pass the credentials in the config itself
-        `)
-	}
 
 	const { creds } = authState
 	// add transaction capability
-	const keys = addTransactionCapability(authState.keys, logger)
+	const keys = addTransactionCapability(authState.keys, logger, transactionOpts)
 
 	let lastDateRecv: Date
 	let epoch = 1
@@ -358,7 +349,7 @@ export const makeSocket = ({
 				end(new Boom('Connection was lost', { statusCode: DisconnectReason.connectionLost }))
 			} else if(ws.readyState === ws.OPEN) {
 				// if its all good, send a keep alive request
-				sendNode(
+				query(
 					{
 						tag: 'iq',
 						attrs: {
@@ -428,12 +419,10 @@ export const makeSocket = ({
 
 	ws.on('message', onMessageRecieved)
 	ws.on('open', validateConnection)
-	ws.on('error', end)
+	ws.on('error', error => end(new Boom(`WebSocket Error (${error.message})`, { statusCode: 500, data: error })))
 	ws.on('close', () => end(new Boom('Connection Terminated', { statusCode: DisconnectReason.connectionClosed })))
 	// the server terminated the connection
-	ws.on('CB:xmlstreamend', () => {
-		end(new Boom('Connection Terminated by Server', { statusCode: DisconnectReason.connectionClosed }))
-	})
+	ws.on('CB:xmlstreamend', () => end(new Boom('Connection Terminated by Server', { statusCode: DisconnectReason.connectionClosed })))
 	// QR gen
 	ws.on('CB:iq,type:set,pair-device', async(stanza: BinaryNode) => {
 		const iq: BinaryNode = {
