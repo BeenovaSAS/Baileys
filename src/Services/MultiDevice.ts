@@ -1,21 +1,22 @@
-import { Boom } from '@hapi/boom'
-import axios from 'axios'
-import * as fs from 'fs'
+import { Boom } from "@hapi/boom";
+import axios from "axios";
+import * as fs from "fs";
 import makeWASocket, {
-	DisconnectReason,
-	fetchLatestBaileysVersion,
-	makeWALegacySocket,
-	useSingleFileAuthState,
-	useSingleFileLegacyAuthState
-} from '../index'
-import endpoint from './endpoints.config'
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  makeWALegacySocket,
+  useSingleFileAuthState,
+  useSingleFileLegacyAuthState,
+} from "../index";
+import endpoint from "./endpoints.config";
 
 // the store maintains the data of the WA connection in memory
 // can be written out to a file & read from it
-const clients = []
+const clients = [];
 
-const conectionStatus = []
+const conectionStatus = [];
 // start a connection
+
 export const connectToWhatsApp = async(req: any, res: any) => {
 	// fetch latest version of WA Web
 	const { version } = await fetchLatestBaileysVersion()
@@ -182,3 +183,4 @@ const closeSession = async(id, multiDevice) => {
 		console.error('Error eliminado el archivo', id)
 	}
 }
+
