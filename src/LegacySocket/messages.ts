@@ -1,8 +1,7 @@
-import { Boom } from '@hapi/boom'
 import { proto } from '../../WAProto'
 import { WA_DEFAULT_EPHEMERAL } from '../Defaults'
 import { AnyMessageContent, Chat, GroupMetadata, LegacySocketConfig, MediaConnInfo, MessageUpdateType, MessageUserReceipt, MessageUserReceiptUpdate, MiscMessageGenerationOptions, ParticipantAction, WAFlag, WAMessage, WAMessageCursor, WAMessageKey, WAMessageStatus, WAMessageStubType, WAMessageUpdate, WAMetric, WAUrlInfo } from '../Types'
-import { downloadMediaMessage, generateWAMessage, getWAUploadToServer, MediaDownloadOptions, normalizeMessageContent, toNumber } from '../Utils'
+import { assertMediaContent, downloadMediaMessage, generateWAMessage, getWAUploadToServer, MediaDownloadOptions, normalizeMessageContent, toNumber } from '../Utils'
 import { areJidsSameUser, BinaryNode, getBinaryNodeMessages, isJidGroup, jidNormalizedUser } from '../WABinary'
 import makeChatsSocket from './chats'
 
@@ -13,7 +12,7 @@ const STATUS_MAP = {
 } as { [_: string]: WAMessageStatus }
 
 const makeMessagesSocket = (config: LegacySocketConfig) => {
-	const { logger } = config
+	const { logger, treatCiphertextMessagesAsReal } = config
 	const sock = makeChatsSocket(config)
 	const {
 		ev,
@@ -78,13 +77,7 @@ const makeMessagesSocket = (config: LegacySocketConfig) => {
 	}
 
 	const updateMediaMessage = async(message: WAMessage) => {
-		const content = message.message?.audioMessage || message.message?.videoMessage || message.message?.imageMessage || message.message?.stickerMessage || message.message?.documentMessage
-		if(!content) {
-			throw new Boom(
-				`given message ${message.key.id} is not a media message`,
-				{ statusCode: 400, data: message }
-			)
-		}
+		const content = assertMediaContent(message.message)
 
 		const response: BinaryNode = await query ({
 			json: {
@@ -106,7 +99,7 @@ const makeMessagesSocket = (config: LegacySocketConfig) => {
 
 		ev.emit('messages.upsert', { messages: [message], type: 'replace' })
 
-		return response
+		return message
 	}
 
 	const onMessage = (message: WAMessage, type: MessageUpdateType) => {
@@ -120,7 +113,17 @@ const makeMessagesSocket = (config: LegacySocketConfig) => {
 			ev.emit('groups.update', [ { id: jid, ...update } ])
 		}
 
-		if(message.message) {
+		const normalizedContent = normalizeMessageContent(message.message)
+		const protocolMessage = normalizedContent?.protocolMessage
+
+		if(
+			(
+				!!normalizedContent ||
+				(message.messageStubType === WAMessageStubType.CIPHERTEXT && treatCiphertextMessagesAsReal)
+			)
+			&& !normalizedContent?.protocolMessage
+			&& !normalizedContent?.reactionMessage
+		) {
 			chatUpdate.conversationTimestamp = +toNumber(message.messageTimestamp)
 			// add to count if the message isn't from me & there exists a message
 			if(!message.key.fromMe) {
@@ -137,7 +140,18 @@ const makeMessagesSocket = (config: LegacySocketConfig) => {
 			}
 		}
 
-		const protocolMessage = normalizeMessageContent(message.message)?.protocolMessage
+		if(normalizedContent?.reactionMessage) {
+			const reaction: proto.IReaction = {
+				...normalizedContent.reactionMessage,
+				key: message.key,
+			}
+			const operation = normalizedContent.reactionMessage?.text ? 'add' : 'remove'
+			ev.emit(
+				'messages.reaction',
+				{ reaction, key: normalizedContent.reactionMessage!.key!, operation }
+			)
+		}
+
 		// if it's a message to delete another message
 		if(protocolMessage) {
 			switch (protocolMessage.type) {

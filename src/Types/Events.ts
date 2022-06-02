@@ -1,5 +1,8 @@
+import type { Boom } from '@hapi/boom'
 import type EventEmitter from 'events'
+import { proto } from '../../WAProto'
 import { AuthenticationCreds } from './Auth'
+import { WACallEvent } from './Call'
 import { Chat, PresenceData } from './Chat'
 import { Contact } from './Contact'
 import { GroupMetadata, ParticipantAction } from './GroupMetadata'
@@ -31,11 +34,13 @@ export type BaileysEventMap<T> = {
 
     'messages.delete': { keys: WAMessageKey[] } | { jid: string, all: true }
     'messages.update': WAMessageUpdate[]
+    'messages.media-update': { key: WAMessageKey, media?: { ciphertext: Uint8Array, iv: Uint8Array }, error?: Boom }[]
     /**
      * add/update the given messages. If they were received while the connection was online,
      * the update will have type: "notify"
      *  */
     'messages.upsert': { messages: WAMessage[], type: MessageUpdateType }
+    'messages.reaction': { key: WAMessageKey, reaction: proto.IReaction, operation: 'add' | 'remove' }
 
     'message-receipt.update': MessageUserReceiptUpdate[]
 
@@ -46,6 +51,8 @@ export type BaileysEventMap<T> = {
 
     'blocklist.set': { blocklist: string[] }
     'blocklist.update': { blocklist: string[], type: 'add' | 'remove' }
+    /** Receive an update on a call, including when the call was received, rejected, accepted */
+    'call': WACallEvent[]
 }
 
 export interface CommonBaileysEventEmitter<Creds> extends EventEmitter {

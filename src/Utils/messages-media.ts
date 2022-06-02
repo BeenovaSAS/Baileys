@@ -10,9 +10,11 @@ import { join } from 'path'
 import type { Logger } from 'pino'
 import { Readable, Transform } from 'stream'
 import { URL } from 'url'
+import { proto } from '../../WAProto'
 import { DEFAULT_ORIGIN, MEDIA_PATH_MAP } from '../Defaults'
-import { CommonSocketConfig, DownloadableMessage, MediaConnInfo, MediaType, MessageType, WAGenericMediaMessage, WAMediaUpload, WAMediaUploadFunction, WAMessageContent, WAProto } from '../Types'
-import { hkdf } from './crypto'
+import { BaileysEventMap, CommonSocketConfig, DownloadableMessage, MediaConnInfo, MediaDecryptionKeyInfo, MediaType, MessageType, WAGenericMediaMessage, WAMediaUpload, WAMediaUploadFunction, WAMessageContent, WAProto } from '../Types'
+import { BinaryNode, getBinaryNodeChild, getBinaryNodeChildBuffer, jidNormalizedUser } from '../WABinary'
+import { aesDecryptGCM, aesEncryptGCM, hkdf } from './crypto'
 import { generateMessageID } from './generics'
 
 const getTmpFilesDirectory = () => tmpdir()
@@ -60,7 +62,7 @@ export const hkdfInfoKey = (type: MediaType) => {
 }
 
 /** generates all the keys required to encrypt/decrypt & sign a media message */
-export function getMediaKeys(buffer, mediaType: MediaType) {
+export function getMediaKeys(buffer: Uint8Array | string, mediaType: MediaType): MediaDecryptionKeyInfo {
 	if(typeof buffer === 'string') {
 		buffer = Buffer.from(buffer.replace('data:;base64,', ''), 'base64')
 	}
@@ -81,7 +83,7 @@ const extractVideoThumb = async(
 	time: string,
 	size: { width: number; height: number },
 ) => new Promise((resolve, reject) => {
-    	const cmd = `ffmpeg -ss ${time} -i ${path} -y -s ${size.width}x${size.height} -vframes 1 -f image2 ${destPath}`
+    	const cmd = `ffmpeg -ss ${time} -i ${path} -y -vf scale=${size.width}:-1 -vframes 1 -f image2 ${destPath}`
     	exec(cmd, (err) => {
     		if(err) {
 			reject(err)
@@ -91,7 +93,7 @@ const extractVideoThumb = async(
     	})
 }) as Promise<void>
 
-export const extractImageThumb = async(bufferOrFilePath: Readable | Buffer | string) => {
+export const extractImageThumb = async(bufferOrFilePath: Readable | Buffer | string, width = 32) => {
 	if(bufferOrFilePath instanceof Readable) {
 		bufferOrFilePath = await toBuffer(bufferOrFilePath)
 	}
@@ -99,17 +101,17 @@ export const extractImageThumb = async(bufferOrFilePath: Readable | Buffer | str
 	const lib = await getImageProcessingLibrary()
 	if('sharp' in lib) {
 		const result = await lib.sharp!.default(bufferOrFilePath)
-			.resize(32, 32)
+			.resize(width)
 			.jpeg({ quality: 50 })
 			.toBuffer()
 		return result
 	} else {
-		const { read, MIME_JPEG, RESIZE_BILINEAR } = lib.jimp
+		const { read, MIME_JPEG, RESIZE_BILINEAR, AUTO } = lib.jimp
 
 		const jimp = await read(bufferOrFilePath as any)
 		const result = await jimp
 			.quality(50)
-			.resize(32, 32, RESIZE_BILINEAR)
+			.resize(width, AUTO, RESIZE_BILINEAR)
 			.getBufferAsync(MIME_JPEG)
 		return result
 	}
@@ -186,6 +188,7 @@ export const toBuffer = async(stream: Readable) => {
 		buff = Buffer.concat([ buff, chunk ])
 	}
 
+	stream.destroy()
 	return buff
 }
 
@@ -343,12 +346,28 @@ export type MediaDownloadOptions = {
     endByte?: number
 }
 
-export const downloadContentFromMessage = async(
+export const getUrlFromDirectPath = (directPath: string) => `https://${DEF_HOST}${directPath}`
+
+export const downloadContentFromMessage = (
 	{ mediaKey, directPath, url }: DownloadableMessage,
 	type: MediaType,
+	opts: MediaDownloadOptions = { }
+) => {
+	const downloadUrl = url || getUrlFromDirectPath(directPath)
+	const keys = getMediaKeys(mediaKey, type)
+
+	return downloadEncryptedContent(downloadUrl, keys, opts)
+}
+
+/**
+ * Decrypts and downloads an AES256-CBC encrypted file given the keys.
+ * Assumes the SHA256 of the plaintext is appended to the end of the ciphertext
+ * */
+export const downloadEncryptedContent = async(
+	downloadUrl: string,
+	{ cipherKey, iv }: MediaDecryptionKeyInfo,
 	{ startByte, endByte }: MediaDownloadOptions = { }
 ) => {
-	const downloadUrl = url || `https://${DEF_HOST}${directPath}`
 	let bytesFetched = 0
 	let startChunk = 0
 	let firstBlockIsIV = false
@@ -386,7 +405,6 @@ export const downloadContentFromMessage = async(
 	)
 
 	let remainingBytes = Buffer.from([])
-	const { cipherKey, iv } = getMediaKeys(mediaKey, type)
 
 	let aes: Crypto.Decipher
 
@@ -544,4 +562,98 @@ export const getWAUploadToServer = ({ customUploadHosts, fetchAgent, logger }: C
 
 		return urls
 	}
+}
+
+const GCM_AUTH_TAG_LENGTH: number | undefined = 128 >> 3
+
+const getMediaRetryKey = (mediaKey: Buffer | Uint8Array) => {
+	return hkdf(mediaKey, 32, { info: 'WhatsApp Media Retry Notification' })
+}
+
+/**
+ * Generate a binary node that will request the phone to re-upload the media & return the newly uploaded URL
+ */
+export const encryptMediaRetryRequest = (
+	key: proto.IMessageKey,
+	mediaKey: Buffer | Uint8Array,
+	meId: string
+) => {
+	const recp: proto.IServerErrorReceipt = { stanzaId: key.id }
+	const recpBuffer = proto.ServerErrorReceipt.encode(recp).finish()
+
+	const iv = Crypto.randomBytes(12)
+	const retryKey = getMediaRetryKey(mediaKey)
+	const ciphertext = aesEncryptGCM(recpBuffer, retryKey, iv, Buffer.from(key.id))
+
+	const req: BinaryNode = {
+		tag: 'receipt',
+		attrs: {
+			id: key.id,
+			to: jidNormalizedUser(meId),
+			type: 'server-error'
+		},
+		content: [
+			// this encrypt node is actually pretty useless
+			// the media is returned even without this node
+			// keeping it here to maintain parity with WA Web
+			{
+				tag: 'encrypt',
+				attrs: { },
+				content: [
+					{ tag: 'enc_p', attrs: { }, content: ciphertext },
+					{ tag: 'enc_iv', attrs: { }, content: iv }
+				]
+			},
+			{
+				tag: 'rmr',
+				attrs: {
+					jid: key.remoteJid,
+					from_me: (!!key.fromMe).toString(),
+					participant: key.participant || undefined
+				}
+			}
+		]
+	}
+
+	return req
+}
+
+export const decodeMediaRetryNode = (node: BinaryNode) => {
+	const rmrNode = getBinaryNodeChild(node, 'rmr')
+
+	const event: BaileysEventMap<any>['messages.media-update'][number] = {
+		key: {
+			id: node.attrs.id,
+			remoteJid: rmrNode.attrs.jid,
+			fromMe: rmrNode.attrs.from_me === 'true',
+			participant: rmrNode.attrs.participant
+		}
+	}
+
+	const errorNode = getBinaryNodeChild(node, 'error')
+	if(errorNode) {
+		const errorCode = +errorNode.attrs.code
+		event.error = new Boom(`Failed to re-upload media (${errorCode})`, { data: errorNode.attrs })
+	} else {
+		const encryptedInfoNode = getBinaryNodeChild(node, 'encrypt')
+		const ciphertext = getBinaryNodeChildBuffer(encryptedInfoNode, 'enc_p')
+		const iv = getBinaryNodeChildBuffer(encryptedInfoNode, 'enc_iv')
+		if(ciphertext && iv) {
+			event.media = { ciphertext, iv }
+		} else {
+			event.error = new Boom('Failed to re-upload media (missing ciphertext)', { statusCode: 404 })
+		}
+	}
+
+	return event
+}
+
+export const decryptMediaRetryData = (
+	{ ciphertext, iv }: { ciphertext: Uint8Array, iv: Uint8Array },
+	mediaKey: Uint8Array,
+	msgId: string
+) => {
+	const retryKey = getMediaRetryKey(mediaKey)
+	const plaintext = aesDecryptGCM(ciphertext, retryKey, iv, Buffer.from(msgId))
+	return proto.MediaRetryNotification.decode(plaintext)
 }

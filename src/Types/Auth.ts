@@ -27,6 +27,11 @@ export type SignalCreds = {
     readonly registrationId: number
 }
 
+export type AccountSettings = {
+    /** unarchive chats when a new message is received */
+    unarchiveChats: boolean
+}
+
 export type AuthenticationCreds = SignalCreds & {
     readonly noiseKey: KeyPair
     readonly advSecretKey: string
@@ -36,10 +41,11 @@ export type AuthenticationCreds = SignalCreds & {
     signalIdentities?: SignalIdentity[]
     myAppStateKeyId?: string
     firstUnuploadedPreKeyId: number
-    serverHasPreKeys: boolean
     nextPreKeyId: number
 
     lastAccountSyncTimestamp?: number
+    platform?: string
+    accountSettings: AccountSettings
 }
 
 export type SignalDataTypeMap = {
@@ -64,6 +70,11 @@ export type SignalKeyStoreWithTransaction = SignalKeyStore & {
     isInTransaction: () => boolean
     transaction(exec: () => Promise<void>): Promise<void>
     prefetch<T extends keyof SignalDataTypeMap>(type: T, ids: string[]): Promise<void>
+}
+
+export type TransactionCapabilityOptions = {
+	maxCommitRetries: number
+	delayBetweenTriesMs: number
 }
 
 export type SignalAuthState = {

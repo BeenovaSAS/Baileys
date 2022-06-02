@@ -24,6 +24,8 @@ export type MessageType = keyof proto.Message
 
 export type DownloadableMessage = { mediaKey?: Uint8Array, directPath?: string, url?: string }
 
+export type MessageReceiptType = 'read' | 'read-self' | 'hist_sync' | 'peer_msg' | 'sender' | 'inactive' | undefined
+
 export type MediaConnInfo = {
     auth: string
     ttl: number
@@ -101,6 +103,7 @@ export type AnyMediaMessageContent = (
 export type AnyRegularMessageContent = (
     ({
 	    text: string
+        linkPreview?: WAUrlInfo
     }
     & Mentionable & Buttonable & Templatable & Listable) |
     AnyMediaMessageContent |
@@ -112,6 +115,8 @@ export type AnyRegularMessageContent = (
     } |
     {
         location: WALocationMessage
+    } | {
+        react: proto.IReactionMessage
     }
 ) & ViewOnce
 
@@ -124,25 +129,30 @@ export type AnyMessageContent = AnyRegularMessageContent | {
 	disappearingMessagesInChat: boolean | number
 }
 
-export type MessageRelayOptions = {
+export type GroupMetadataParticipants = Pick<GroupMetadata, 'participants'>
+
+type MinimalRelayOptions = {
+    /** override the message ID with a custom provided string */
     messageId?: string
-    /** only send to a specific participant */
-    participant?: string
-    additionalAttributes?: { [_: string]: string }
-    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>
-    //cachedDevices?: (jid: string) => Promise<string[] | undefined>
+    /** cached group metadata, use to prevent redundant requests to WA & speed up msg sending */
+    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadataParticipants | undefined>
 }
 
-export type MiscMessageGenerationOptions = {
-    /** Force message id */
-    messageId?: string
+export type MessageRelayOptions = MinimalRelayOptions & {
+    /** only send to a specific participant; used when a message decryption fails for a single user */
+    participant?: string
+    /** additional attributes to add to the WA binary node */
+    additionalAttributes?: { [_: string]: string }
+}
+
+export type MiscMessageGenerationOptions = MinimalRelayOptions & {
     /** optional, if you want to manually set the timestamp of the message */
 	timestamp?: Date
     /** the message you want to quote */
 	quoted?: WAMessage
     /** disappearing messages settings */
     ephemeralExpiration?: number | string
-
+    /** timeout for media upload to WA server */
     mediaUploadTimeoutMs?: number
 }
 export type MessageGenerationOptionsFromContent = MiscMessageGenerationOptions & {
@@ -173,3 +183,9 @@ export type WAMessageUpdate = { update: Partial<WAMessage>, key: proto.IMessageK
 export type WAMessageCursor = { before: WAMessageKey | undefined } | { after: WAMessageKey | undefined }
 
 export type MessageUserReceiptUpdate = { key: proto.IMessageKey, receipt: MessageUserReceipt }
+
+export type MediaDecryptionKeyInfo = {
+    iv: Buffer
+    cipherKey: Buffer
+    macKey?: Buffer
+}
