@@ -9,37 +9,50 @@ import { BaileysEventMap, CommonBaileysEventEmitter, DisconnectReason, WACallUpd
 import { BinaryNode, getAllBinaryNodeChildren } from '../WABinary'
 
 const PLATFORM_MAP = {
-	'aix': 'AIX',
-	'darwin': 'Mac OS',
-	'win32': 'Windows',
-	'android': 'Android'
-}
+  aix: "AIX",
+  darwin: "Mac OS",
+  win32: "Windows",
+  android: "Android",
+};
 
 export const Browsers = {
 	ubuntu: browser => ['Ubuntu', browser, '20.0.04'] as [string, string, string],
 	macOS: browser => ['Mac OS', browser, '10.15.7'] as [string, string, string],
-	baileys: browser => ['Baileys', browser, '4.0.0'] as [string, string, string],
+	baileys: browser => ['DogtorSoftware', browser, '4.0.0'] as [string, string, string],
 	/** The appropriate browser based on your OS & release */
 	appropriate: browser => [ PLATFORM_MAP[platform()] || 'Ubuntu', browser, release() ] as [string, string, string]
 }
 
 export const BufferJSON = {
-	replacer: (k, value: any) => {
-		if(Buffer.isBuffer(value) || value instanceof Uint8Array || value?.type === 'Buffer') {
-			return { type: 'Buffer', data: Buffer.from(value?.data || value).toString('base64') }
-		}
+  replacer: (k, value: any) => {
+    if (
+      Buffer.isBuffer(value) ||
+      value instanceof Uint8Array ||
+      value?.type === "Buffer"
+    ) {
+      return {
+        type: "Buffer",
+        data: Buffer.from(value?.data || value).toString("base64"),
+      };
+    }
 
-		return value
-	},
-	reviver: (_, value: any) => {
-		if(typeof value === 'object' && !!value && (value.buffer === true || value.type === 'Buffer')) {
-			const val = value.data || value.value
-			return typeof val === 'string' ? Buffer.from(val, 'base64') : Buffer.from(val || [])
-		}
+    return value;
+  },
+  reviver: (_, value: any) => {
+    if (
+      typeof value === "object" &&
+      !!value &&
+      (value.buffer === true || value.type === "Buffer")
+    ) {
+      const val = value.data || value.value;
+      return typeof val === "string"
+        ? Buffer.from(val, "base64")
+        : Buffer.from(val || []);
+    }
 
-		return value
-	}
-}
+    return value;
+  },
+};
 
 export const writeRandomPadMax16 = (msg: Uint8Array) => {
 	const pad = randomBytes(1)
@@ -52,18 +65,18 @@ export const writeRandomPadMax16 = (msg: Uint8Array) => {
 }
 
 export const unpadRandomMax16 = (e: Uint8Array | Buffer) => {
-	const t = new Uint8Array(e)
-	if(0 === t.length) {
-		throw new Error('unpadPkcs7 given empty bytes')
-	}
+  const t = new Uint8Array(e);
+  if (0 === t.length) {
+    throw new Error("unpadPkcs7 given empty bytes");
+  }
 
-	var r = t[t.length - 1]
-	if(r > t.length) {
-		throw new Error(`unpad given ${t.length} bytes, but pad is ${r}`)
-	}
+  var r = t[t.length - 1];
+  if (r > t.length) {
+    throw new Error(`unpad given ${t.length} bytes, but pad is ${r}`);
+  }
 
-	return new Uint8Array(t.buffer, t.byteOffset, t.length - r)
-}
+  return new Uint8Array(t.buffer, t.byteOffset, t.length - r);
+};
 
 export const encodeWAMessage = (message: proto.IMessage) => (
 	writeRandomPadMax16(
@@ -108,80 +121,89 @@ export function shallowChanges <T>(old: T, current: T, { lookForDeletedKeys }: {
 }
 
 /** unix timestamp of a date in seconds */
-export const unixTimestampSeconds = (date: Date = new Date()) => Math.floor(date.getTime() / 1000)
+export const unixTimestampSeconds = (date: Date = new Date()) =>
+  Math.floor(date.getTime() / 1000);
 
-export type DebouncedTimeout = ReturnType<typeof debouncedTimeout>
+export type DebouncedTimeout = ReturnType<typeof debouncedTimeout>;
 
-export const debouncedTimeout = (intervalMs: number = 1000, task: () => void = undefined) => {
-	let timeout: NodeJS.Timeout
-	return {
-		start: (newIntervalMs?: number, newTask?: () => void) => {
-			task = newTask || task
-			intervalMs = newIntervalMs || intervalMs
-			timeout && clearTimeout(timeout)
-			timeout = setTimeout(task, intervalMs)
-		},
-		cancel: () => {
-			timeout && clearTimeout(timeout)
-			timeout = undefined
-		},
-		setTask: (newTask: () => void) => task = newTask,
-		setInterval: (newInterval: number) => intervalMs = newInterval
-	}
-}
+export const debouncedTimeout = (
+  intervalMs: number = 1000,
+  task: () => void = undefined
+) => {
+  let timeout: NodeJS.Timeout;
+  return {
+    start: (newIntervalMs?: number, newTask?: () => void) => {
+      task = newTask || task;
+      intervalMs = newIntervalMs || intervalMs;
+      timeout && clearTimeout(timeout);
+      timeout = setTimeout(task, intervalMs);
+    },
+    cancel: () => {
+      timeout && clearTimeout(timeout);
+      timeout = undefined;
+    },
+    setTask: (newTask: () => void) => (task = newTask),
+    setInterval: (newInterval: number) => (intervalMs = newInterval),
+  };
+};
 
-export const delay = (ms: number) => delayCancellable (ms).delay
+export const delay = (ms: number) => delayCancellable(ms).delay;
 
 export const delayCancellable = (ms: number) => {
-	const stack = new Error().stack
-	let timeout: NodeJS.Timeout
-	let reject: (error) => void
-	const delay: Promise<void> = new Promise((resolve, _reject) => {
-		timeout = setTimeout(resolve, ms)
-		reject = _reject
-	})
-	const cancel = () => {
-		clearTimeout (timeout)
-		reject(
-			new Boom('Cancelled', {
-				statusCode: 500,
-				data: {
-					stack
-				}
-			})
-		)
-	}
+  const stack = new Error().stack;
+  let timeout: NodeJS.Timeout;
+  let reject: (error) => void;
+  const delay: Promise<void> = new Promise((resolve, _reject) => {
+    timeout = setTimeout(resolve, ms);
+    reject = _reject;
+  });
+  const cancel = () => {
+    clearTimeout(timeout);
+    reject(
+      new Boom("Cancelled", {
+        statusCode: 500,
+        data: {
+          stack,
+        },
+      })
+    );
+  };
 
-	return { delay, cancel }
-}
+  return { delay, cancel };
+};
 
-export async function promiseTimeout<T>(ms: number, promise: (resolve: (v?: T)=>void, reject: (error) => void) => void) {
-	if(!ms) {
-		return new Promise (promise)
-	}
+export async function promiseTimeout<T>(
+  ms: number,
+  promise: (resolve: (v?: T) => void, reject: (error) => void) => void
+) {
+  if (!ms) {
+    return new Promise(promise);
+  }
 
-	const stack = new Error().stack
-	// Create a promise that rejects in <ms> milliseconds
-	const { delay, cancel } = delayCancellable (ms)
-	const p = new Promise ((resolve, reject) => {
-		delay
-			.then(() => reject(
-				new Boom('Timed Out', {
-					statusCode: DisconnectReason.timedOut,
-					data: {
-						stack
-					}
-				})
-			))
-			.catch (err => reject(err))
+  const stack = new Error().stack;
+  // Create a promise that rejects in <ms> milliseconds
+  const { delay, cancel } = delayCancellable(ms);
+  const p = new Promise((resolve, reject) => {
+    delay
+      .then(() =>
+        reject(
+          new Boom("Timed Out", {
+            statusCode: DisconnectReason.timedOut,
+            data: {
+              stack,
+            },
+          })
+        )
+      )
+      .catch((err) => reject(err));
 
-		promise (resolve, reject)
-	})
-		.finally (cancel)
-	return p as Promise<T>
+    promise(resolve, reject);
+  }).finally(cancel);
+  return p as Promise<T>;
 }
 
 // generate a random ID to attach to a message
+
 export const generateMessageID = () => 'BAE5' + randomBytes(6).toString('hex').toUpperCase()
 
 export function bindWaitForEvent<T extends keyof BaileysEventMap<any>>(ev: CommonBaileysEventEmitter<any>, event: T) {
@@ -232,6 +254,7 @@ export const printQRIfNecessaryListener = (ev: CommonBaileysEventEmitter<any>, l
 		}
 	})
 }
+
 
 /**
  * utility that fetches latest baileys version from the master branch.
