@@ -20,12 +20,13 @@ export const NOISE_WA_HEADER = Buffer.from(
 ) // last is "DICT_VERSION"
 /** from: https://stackoverflow.com/questions/3809401/what-is-a-good-regular-expression-to-match-a-url */
 export const URL_REGEX = /[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&//=]*)?/gi
+export const URL_EXCLUDE_REGEX = /.*@.*/
 
 export const WA_CERT_DETAILS = {
 	SERIAL: 0,
 }
 
-const BASE_CONNECTION_CONFIG: CommonSocketConfig<any> = {
+const BASE_CONNECTION_CONFIG: CommonSocketConfig = {
 	version: version as any,
 	browser: Browsers.baileys('Chrome'),
 
@@ -37,14 +38,15 @@ const BASE_CONNECTION_CONFIG: CommonSocketConfig<any> = {
 	emitOwnEvents: true,
 	defaultQueryTimeoutMs: 60_000,
 	customUploadHosts: [],
-	treatCiphertextMessagesAsReal: false,
 	retryRequestDelayMs: 250
 }
 
 export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	...BASE_CONNECTION_CONFIG,
+	auth: undefined as any,
 	downloadHistory: true,
 	markOnlineOnConnect: true,
+	syncFullHistory: false,
 	linkPreviewImageThumbnailWidth: 192,
 	transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 3000 },
 	getMessage: async() => undefined

@@ -1,6 +1,6 @@
 
 import * as constants from './constants'
-import { jidDecode } from './jid-utils'
+import { FullJid, jidDecode } from './jid-utils'
 import type { BinaryNode, BinaryNodeCodingOptions } from './types'
 
 export const encodeBinaryNode = (
@@ -22,6 +22,10 @@ export const encodeBinaryNode = (
 	const pushBytes = (bytes: Uint8Array | Buffer | number[]) => (
 		bytes.forEach (b => buffer.push(b))
 	)
+	const pushInt16 = (value: number) => {
+		pushBytes([(value >> 8) & 0xff, value & 0xff])
+	}
+
 	const pushInt20 = (value: number) => (
 		pushBytes([(value >> 16) & 0x0f, (value >> 8) & 0xff, value & 0xff])
 	)
@@ -48,7 +52,7 @@ export const encodeBinaryNode = (
 		pushBytes(bytes)
 	}
 
-	const writeJid = ({ agent, device, user, server }: ReturnType<typeof jidDecode>) => {
+	const writeJid = ({ agent, device, user, server }: FullJid) => {
 		if(typeof agent !== 'undefined' || typeof device !== 'undefined') {
 			pushByte(TAGS.AD_JID)
 			pushByte(agent || 0)
@@ -194,7 +198,8 @@ export const encodeBinaryNode = (
 		} else if(listSize < 256) {
 			pushBytes([TAGS.LIST_8, listSize])
 		} else {
-			pushBytes([TAGS.LIST_16, listSize])
+			pushByte(TAGS.LIST_16)
+			pushInt16(listSize)
 		}
 	}
 
