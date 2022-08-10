@@ -22,10 +22,13 @@ const PLATFORM_MAP = {
 };
 
 export const Browsers = {
-	ubuntu: browser => ['Ubuntu', browser, '20.0.04'] as [string, string, string],
-	macOS: browser => ['Mac OS', browser, '10.15.7'] as [string, string, string],
-	baileys: browser => ['Baileys', browser, '4.0.0'] as [string, string, string],
-	/** The appropriate browser based on your OS & release */
+  ubuntu: (browser) =>
+    ["Ubuntu", browser, "20.0.04"] as [string, string, string],
+  macOS: (browser) =>
+    ["Mac OS", browser, "10.15.7"] as [string, string, string],
+  baileys: (browser) =>
+    ["Baileys", browser, "4.0.0"] as [string, string, string],
+  /** The appropriate browser based on your OS & release */
   appropriate: (browser) =>
     [PLATFORM_MAP[platform()] || "Ubuntu", browser, release()] as [
       string,
@@ -107,7 +110,12 @@ export const encodeBigEndian = (e: number, t = 4) => {
   return a;
 };
 
-export const toNumber = (t: Long | number | null | undefined): number => ((typeof t === 'object' && t) ? ('toNumber' in t ? t.toNumber() : (t as any).low) : t)
+export const toNumber = (t: Long | number | null | undefined): number =>
+  typeof t === "object" && t
+    ? "toNumber" in t
+      ? t.toNumber()
+      : (t as any).low
+    : t;
 
 /** unix timestamp of a date in seconds */
 export const unixTimestampSeconds = (date: Date = new Date()) =>
@@ -192,17 +200,21 @@ export async function promiseTimeout<T>(
 }
 
 // generate a random ID to attach to a message
-export const generateMessageID = () => 'BAE5' + randomBytes(6).toString('hex').toUpperCase()
+export const generateMessageID = () =>
+  "BAE5" + randomBytes(6).toString("hex").toUpperCase();
 
-export function bindWaitForEvent<T extends keyof BaileysEventMap<any>>(ev: CommonBaileysEventEmitter<any>, event: T) {
-	return async(check: (u: BaileysEventMap<any>[T]) => boolean | undefined, timeoutMs?: number) => {
-		let listener: (item: BaileysEventMap<any>[T]) => void
-		let closeListener: any
-		await (
-			promiseTimeout(
-				timeoutMs,
-				(resolve, reject) => {
-					closeListener = ({ connection, lastDisconnect }) => {
+export function bindWaitForEvent<T extends keyof BaileysEventMap<any>>(
+  ev: CommonBaileysEventEmitter<any>,
+  event: T
+) {
+  return async (
+    check: (u: BaileysEventMap<any>[T]) => boolean | undefined,
+    timeoutMs?: number
+  ) => {
+    let listener: (item: BaileysEventMap<any>[T]) => void;
+    let closeListener: any;
+    await promiseTimeout(timeoutMs, (resolve, reject) => {
+      closeListener = ({ connection, lastDisconnect }) => {
         if (connection === "close") {
           reject(
             lastDisconnect?.error ||
@@ -294,27 +306,6 @@ export const fetchLatestWaWebVersion = async () => {
   }
 };
 
-/**
- * A utility that fetches the latest web version of whatsapp.
- * Use to ensure your WA connection is always on the latest version
- */
-export const fetchLatestWaWebVersion = async() => {
-	try {
-		const result = await axios.get('https://web.whatsapp.com/check-update?version=1&platform=web', { responseType: 'json' })
-		const version = result.data.currentVersion.split('.')
-		return {
-			version: [+version[0], +version[1], +version[2]] as WAVersion,
-			isLatest: true
-		}
-	} catch(error) {
-		return {
-			version: baileysVersion as WAVersion,
-			isLatest: false,
-			error
-		}
-	}
-}
-
 /** unique message tag prefix for MD clients */
 export const generateMdTagPrefix = () => {
   const bytes = randomBytes(4);
@@ -322,19 +313,19 @@ export const generateMdTagPrefix = () => {
 };
 
 const STATUS_MAP: { [_: string]: proto.WebMessageInfo.Status } = {
-	'played': proto.WebMessageInfo.Status.PLAYED,
-	'read': proto.WebMessageInfo.Status.READ,
-	'read-self': proto.WebMessageInfo.Status.READ
-}
+  played: proto.WebMessageInfo.Status.PLAYED,
+  read: proto.WebMessageInfo.Status.READ,
+  "read-self": proto.WebMessageInfo.Status.READ,
+};
 /**
  * Given a type of receipt, returns what the new status of the message should be
  * @param type type from receipt
  */
 export const getStatusFromReceiptType = (type: string | undefined) => {
-	const status = STATUS_MAP[type!]
-	if(typeof type === 'undefined') {
-		return proto.WebMessageInfo.Status.DELIVERY_ACK
-	}
+  const status = STATUS_MAP[type!];
+  if (typeof type === "undefined") {
+    return proto.WebMessageInfo.Status.DELIVERY_ACK;
+  }
 
   return status;
 };
@@ -392,29 +383,30 @@ export const getCallStatusFromNode = ({ tag, attrs }: BinaryNode) => {
       break;
   }
 
-	return status
-}
+  return status;
+};
 
-const UNEXPECTED_SERVER_CODE_TEXT = 'Unexpected server response: '
+const UNEXPECTED_SERVER_CODE_TEXT = "Unexpected server response: ";
 
 export const getCodeFromWSError = (error: Error) => {
-	let statusCode = 500
-	if(error.message.includes(UNEXPECTED_SERVER_CODE_TEXT)) {
-		const code = +error.message.slice(UNEXPECTED_SERVER_CODE_TEXT.length)
-		if(!Number.isNaN(code) && code >= 400) {
-			statusCode = code
-		}
-	} else if((error as any).code?.startsWith('E')) { // handle ETIMEOUT, ENOTFOUND etc
-		statusCode = 408
-	}
+  let statusCode = 500;
+  if (error.message.includes(UNEXPECTED_SERVER_CODE_TEXT)) {
+    const code = +error.message.slice(UNEXPECTED_SERVER_CODE_TEXT.length);
+    if (!Number.isNaN(code) && code >= 400) {
+      statusCode = code;
+    }
+  } else if ((error as any).code?.startsWith("E")) {
+    // handle ETIMEOUT, ENOTFOUND etc
+    statusCode = 408;
+  }
 
-	return statusCode
-}
+  return statusCode;
+};
 
 /**
  * Is the given platform WA business
  * @param platform AuthenticationCreds.platform
  */
 export const isWABusinessPlatform = (platform: string) => {
-	return platform === 'smbi' || platform === 'smba'
-}
+  return platform === "smbi" || platform === "smba";
+};
