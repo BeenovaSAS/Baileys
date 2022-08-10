@@ -6,7 +6,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeWALegacySocket,
-  useSingleFileAuthState,
+  useMultiFileAuthState,
   useSingleFileLegacyAuthState,
 } from "../index";
 import endpoint from "./endpoints.config";
@@ -40,8 +40,8 @@ export const connectToWhatsApp = async (req: any, res: any) => {
   let sendRes = false;
 
   if (multiDevice) {
-    const { state, saveState } = useSingleFileAuthState(
-      `../../sessions/auth_info_multi_${id}.json`
+    const { state, saveCreds } = await useMultiFileAuthState(
+      `../../sessions/auth_info_multi_${id}`
     );
 
     clients[id] = makeWASocket({
@@ -49,7 +49,7 @@ export const connectToWhatsApp = async (req: any, res: any) => {
       printQRInTerminal: true,
       auth: state,
     });
-    clients[id].ev.on("creds.update", saveState);
+    clients[id].ev.on("creds.update", saveCreds);
   } else {
     const { state, saveState } = useSingleFileLegacyAuthState(
       `../../sessions/auth_info_legacy_${id}.json`
