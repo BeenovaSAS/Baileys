@@ -1,4 +1,5 @@
 import { Boom } from '@hapi/boom'
+import { AxiosRequestConfig } from 'axios'
 import type { Logger } from 'pino'
 import { proto } from '../../WAProto'
 import { BaileysEventEmitter, ChatModification, ChatMutation, Contact, InitialAppStateSyncOptions, LastMessageList, LTHashState, WAPatchCreate, WAPatchName } from '../Types'
@@ -273,7 +274,10 @@ export const decodeSyncdPatch = async(
 	return result
 }
 
-export const extractSyncdPatches = async(result: BinaryNode) => {
+export const extractSyncdPatches = async(
+	result: BinaryNode,
+	options: AxiosRequestConfig<any>
+) => {
 	const syncNode = getBinaryNodeChild(result, 'sync')
 	const collectionNodes = getBinaryNodeChildren(syncNode, 'collection')
 
@@ -300,7 +304,7 @@ export const extractSyncdPatches = async(result: BinaryNode) => {
 					const blobRef = proto.ExternalBlobReference.decode(
                         snapshotNode.content! as Buffer
 					)
-					const data = await downloadExternalBlob(blobRef)
+					const data = await downloadExternalBlob(blobRef, options)
 					snapshot = proto.SyncdSnapshot.decode(data)
 				}
 
@@ -328,18 +332,24 @@ export const extractSyncdPatches = async(result: BinaryNode) => {
 }
 
 
-export const downloadExternalBlob = async(blob: proto.IExternalBlobReference) => {
-	const stream = await downloadContentFromMessage(blob, 'md-app-state')
-	let buffer = Buffer.from([])
+export const downloadExternalBlob = async(
+	blob: proto.IExternalBlobReference,
+	options: AxiosRequestConfig<any>
+) => {
+	const stream = await downloadContentFromMessage(blob, 'md-app-state', { options })
+	const bufferArray: Buffer[] = []
 	for await (const chunk of stream) {
-		buffer = Buffer.concat([buffer, chunk])
+		bufferArray.push(chunk)
 	}
 
-	return buffer
+	return Buffer.concat(bufferArray)
 }
 
-export const downloadExternalPatch = async(blob: proto.IExternalBlobReference) => {
-	const buffer = await downloadExternalBlob(blob)
+export const downloadExternalPatch = async(
+	blob: proto.IExternalBlobReference,
+	options: AxiosRequestConfig<any>
+) => {
+	const buffer = await downloadExternalBlob(blob, options)
 	const syncData = proto.SyncdMutations.decode(buffer)
 	return syncData
 }
@@ -399,6 +409,7 @@ export const decodePatches = async(
 	initial: LTHashState,
 	getAppStateSyncKey: FetchAppStateSyncKey,
 	onMutation: (mut: ChatMutation) => void,
+	options: AxiosRequestConfig<any>,
 	minimumVersionNumber?: number,
 	logger?: Logger,
 	validateMacs: boolean = true
@@ -416,7 +427,7 @@ export const decodePatches = async(
 		const { version, keyId, snapshotMac } = syncd
 		if(syncd.externalMutations) {
 			logger?.trace({ name, version }, 'downloading external patch')
-			const ref = await downloadExternalPatch(syncd.externalMutations)
+			const ref = await downloadExternalPatch(syncd.externalMutations, options)
 			logger?.debug({ name, version, mutations: ref.mutations.length }, 'downloaded external patch')
 			syncd.mutations?.push(...ref.mutations)
 		}
@@ -610,7 +621,10 @@ export const processSyncAction = (
 	const recvChats = initialSyncOpts?.recvChats
 	const accountSettings = initialSyncOpts?.accountSettings
 
-	const { syncAction: { value: action }, index: [type, id, msgId, fromMe] } = syncAction
+	const {
+		syncAction: { value: action },
+		index: [type, id, msgId, fromMe]
+	} = syncAction
 	if(action?.muteAction) {
 		ev.emit(
 			'chats.update',
@@ -663,7 +677,7 @@ export const processSyncAction = (
 				ev.emit('chats.update', [{ id, unreadCount: !!markReadAction?.read ? 0 : -1 }])
 			}
 		}
-	} else if(action?.clearChatAction) {
+	} else if(action?.deleteMessageForMeAction || type === 'deleteMessageForMe') {
 		ev.emit('messages.delete', { keys: [
 			{
 				remoteJid: id,
