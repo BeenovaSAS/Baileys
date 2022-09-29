@@ -2,18 +2,15 @@ import { Boom } from "@hapi/boom";
 import axios from "axios";
 import * as fs from "fs";
 import makeWASocket, {
-  AnyWASocket,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  makeWALegacySocket,
   useMultiFileAuthState,
-  useSingleFileLegacyAuthState,
 } from "../index";
 import endpoint from "./endpoints.config";
 
 // the store maintains the data of the WA connection in memory
 // can be written out to a file & read from it
-const clients: AnyWASocket[] = [];
+const clients: any[] = [];
 
 const conectionStatus: boolean[] = [];
 // start a connection
@@ -39,29 +36,16 @@ export const connectToWhatsApp = async (req: any, res: any) => {
 
   let sendRes = false;
 
-  if (multiDevice) {
-    const { state, saveCreds } = await useMultiFileAuthState(
-      `../../sessions/auth_info_multi_${id}`
-    );
+  const { state, saveCreds } = await useMultiFileAuthState(
+    `../../sessions/auth_info_multi_${id}`
+  );
 
-    clients[id] = makeWASocket({
-      version,
-      printQRInTerminal: true,
-      auth: state,
-    });
-    clients[id].ev.on("creds.update", saveCreds);
-  } else {
-    const { state, saveState } = useSingleFileLegacyAuthState(
-      `../../sessions/auth_info_legacy_${id}.json`
-    );
-
-    clients[id] = makeWALegacySocket({
-      version,
-      printQRInTerminal: true,
-      auth: state,
-    });
-    clients[id].ev.on("creds.update", saveState);
-  }
+  clients[id] = makeWASocket({
+    version,
+    printQRInTerminal: true,
+    auth: state,
+  });
+  clients[id].ev.on("creds.update", saveCreds);
 
   clients[id].ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update;
