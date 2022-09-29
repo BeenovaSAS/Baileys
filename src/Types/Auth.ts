@@ -48,6 +48,8 @@ export type AuthenticationCreds = SignalCreds & {
     platform?: string
 
     processedHistoryMessages: MinimalMessage[]
+    /** number of times history & app state has been synced */
+    accountSyncCounter: number
     accountSettings: AccountSettings
 }
 
@@ -67,6 +69,8 @@ type Awaitable<T> = T | Promise<T>
 export type SignalKeyStore = {
     get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]): Awaitable<{ [id: string]: SignalDataTypeMap[T] }>
     set(data: SignalDataSet): Awaitable<void>
+    /** clear all the data in the store */
+    clear?(): Awaitable<void>
 }
 
 export type SignalKeyStoreWithTransaction = SignalKeyStore & {

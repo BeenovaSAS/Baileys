@@ -1,13 +1,13 @@
 import { Boom } from "@hapi/boom";
-import axios from "axios";
+import axios, { AxiosRequestConfig } from "axios";
 import { randomBytes } from "crypto";
 import { platform, release } from "os";
 import { Logger } from "pino";
 import { proto } from "../../WAProto";
 import { version as baileysVersion } from "../Defaults/baileys-version.json";
 import {
+  BaileysEventEmitter,
   BaileysEventMap,
-  CommonBaileysEventEmitter,
   DisconnectReason,
   WACallUpdateType,
   WAVersion,
@@ -203,15 +203,15 @@ export async function promiseTimeout<T>(
 export const generateMessageID = () =>
   "BAE5" + randomBytes(6).toString("hex").toUpperCase();
 
-export function bindWaitForEvent<T extends keyof BaileysEventMap<any>>(
-  ev: CommonBaileysEventEmitter<any>,
+export function bindWaitForEvent<T extends keyof BaileysEventMap>(
+  ev: BaileysEventEmitter,
   event: T
 ) {
   return async (
-    check: (u: BaileysEventMap<any>[T]) => boolean | undefined,
+    check: (u: BaileysEventMap[T]) => boolean | undefined,
     timeoutMs?: number
   ) => {
-    let listener: (item: BaileysEventMap<any>[T]) => void;
+    let listener: (item: BaileysEventMap[T]) => void;
     let closeListener: any;
     await promiseTimeout(timeoutMs, (resolve, reject) => {
       closeListener = ({ connection, lastDisconnect }) => {
@@ -240,17 +240,16 @@ export function bindWaitForEvent<T extends keyof BaileysEventMap<any>>(
   };
 }
 
-export const bindWaitForConnectionUpdate = (
-  ev: CommonBaileysEventEmitter<any>
-) => bindWaitForEvent(ev, "connection.update");
+export const bindWaitForConnectionUpdate = (ev: BaileysEventEmitter) =>
+  bindWaitForEvent(ev, "connection.update");
 
 export const printQRIfNecessaryListener = (
-  ev: CommonBaileysEventEmitter<any>,
+  ev: BaileysEventEmitter,
   logger: Logger
 ) => {
   ev.on("connection.update", async ({ qr }) => {
     if (qr) {
-      const QR = await import("qrcode-terminal").catch((err) => {
+      const QR = await import("qrcode-terminal").catch(() => {
         logger.error("QR code terminal not added as dependency");
       });
       QR?.generate(qr, { small: true });
@@ -262,11 +261,14 @@ export const printQRIfNecessaryListener = (
  * utility that fetches latest baileys version from the master branch.
  * Use to ensure your WA connection is always on the latest version
  */
-export const fetchLatestBaileysVersion = async () => {
+export const fetchLatestBaileysVersion = async (
+  options: AxiosRequestConfig<any> = {}
+) => {
   const URL =
     "https://raw.githubusercontent.com/adiwajshing/Baileys/master/src/Defaults/baileys-version.json";
   try {
     const result = await axios.get<{ version: WAVersion }>(URL, {
+      ...options,
       responseType: "json",
     });
     return {
@@ -286,11 +288,16 @@ export const fetchLatestBaileysVersion = async () => {
  * A utility that fetches the latest web version of whatsapp.
  * Use to ensure your WA connection is always on the latest version
  */
-export const fetchLatestWaWebVersion = async () => {
+export const fetchLatestWaWebVersion = async (
+  options: AxiosRequestConfig<any>
+) => {
   try {
     const result = await axios.get(
       "https://web.whatsapp.com/check-update?version=1&platform=web",
-      { responseType: "json" }
+      {
+        ...options,
+        responseType: "json",
+      }
     );
     const version = result.data.currentVersion.split(".");
     return {
