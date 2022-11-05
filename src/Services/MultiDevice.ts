@@ -19,16 +19,7 @@ export const connectToWhatsApp = async (req: any, res: any) => {
   // fetch latest version of WA Web
   const { version } = await fetchLatestBaileysVersion();
 
-  const { id, multiDevice } = req.body;
-
-  console.error(
-    "SOy multi device ---------------------------------",
-    multiDevice
-  );
-  console.error(
-    "Conection status ---------------------------------",
-    conectionStatus[id]
-  );
+  const { id } = req.body;
 
   if (conectionStatus[id]) {
     return res.jsonp({ mensaje: "Sesión cargada", name: "whatsapp" });
@@ -68,7 +59,7 @@ export const connectToWhatsApp = async (req: any, res: any) => {
           break;
         case DisconnectReason.loggedOut:
           console.log("Eliminando el archivo");
-          await closeSession(id, multiDevice);
+          await closeSession(id);
           break;
         case DisconnectReason.multideviceMismatch:
           axios({
@@ -97,8 +88,8 @@ export const connectToWhatsApp = async (req: any, res: any) => {
       const body = {
         id,
         request: req.body,
-        multi_device: multiDevice,
-        user: { ...clients[id], multi_device: multiDevice },
+        multi_device: true,
+        user: { ...clients[id], multi_device: true },
       };
 
       axios({
@@ -164,11 +155,13 @@ export const sendFileMessage = async (req: any, res: any) => {
   return res.jsonp({ status: 200, mensaje: "Notificación enviada" });
 };
 
-const closeSession = async (id, multiDevice) => {
+const closeSession = async (id) => {
   try {
-    fs.unlinkSync(
-      `../../sessions/auth_info_${multiDevice ? "multi" : "legacy"}_${id}.json`
-    );
+    fs.rmSync(`../../sessions/auth_info_multi_${id}`, {
+      recursive: true,
+      force: true,
+    });
+    ``;
     //file removed
   } catch (err) {
     console.error("Error eliminado el archivo", id);

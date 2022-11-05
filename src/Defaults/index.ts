@@ -1,3 +1,4 @@
+import { proto } from '../../WAProto'
 import type { MediaType, SocketConfig } from '../Types'
 import { Browsers } from '../Utils'
 import logger from '../Utils/logger'
@@ -19,12 +20,19 @@ export const NOISE_WA_HEADER = Buffer.from(
 	[ 87, 65, 6, DICT_VERSION ]
 ) // last is "DICT_VERSION"
 /** from: https://stackoverflow.com/questions/3809401/what-is-a-good-regular-expression-to-match-a-url */
-export const URL_REGEX = /[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&//=]*)?/gi
+export const URL_REGEX = /(http(s)?:\/\/.)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,6}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)/
 export const URL_EXCLUDE_REGEX = /.*@.*/
 
 export const WA_CERT_DETAILS = {
 	SERIAL: 0,
 }
+
+export const PROCESSABLE_HISTORY_TYPES = [
+	proto.Message.HistorySyncNotification.HistorySyncType.INITIAL_BOOTSTRAP,
+	proto.Message.HistorySyncNotification.HistorySyncType.PUSH_NAME,
+	proto.Message.HistorySyncNotification.HistorySyncType.RECENT,
+	proto.Message.HistorySyncNotification.HistorySyncType.FULL
+]
 
 export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	version: version as any,
@@ -40,9 +48,9 @@ export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	retryRequestDelayMs: 250,
 	fireInitQueries: true,
 	auth: undefined as any,
-	downloadHistory: true,
 	markOnlineOnConnect: true,
 	syncFullHistory: false,
+	shouldSyncHistoryMessage: () => true,
 	linkPreviewImageThumbnailWidth: 192,
 	transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 3000 },
 	generateHighQualityLinkPreview: false,

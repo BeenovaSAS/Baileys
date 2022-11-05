@@ -2,7 +2,7 @@
 import { proto } from '../../WAProto'
 import { KEY_BUNDLE_TYPE, MIN_PREKEY_COUNT } from '../Defaults'
 import { MessageReceiptType, MessageRelayOptions, MessageUserReceipt, SocketConfig, WACallEvent, WAMessageKey, WAMessageStubType, WAPatchName } from '../Types'
-import { decodeMediaRetryNode, decodeMessageStanza, delay, encodeBigEndian, encodeSignedDeviceIdentity, getCallStatusFromNode, getNextPreKeys, getStatusFromReceiptType, isHistoryMsg, unixTimestampSeconds, xmppPreKey, xmppSignedPreKey } from '../Utils'
+import { decodeMediaRetryNode, decodeMessageStanza, delay, encodeBigEndian, encodeSignedDeviceIdentity, getCallStatusFromNode, getHistoryMsg, getNextPreKeys, getStatusFromReceiptType, unixTimestampSeconds, xmppPreKey, xmppSignedPreKey } from '../Utils'
 import { makeMutex } from '../Utils/make-mutex'
 import { cleanMessage } from '../Utils/process-message'
 import { areJidsSameUser, BinaryNode, getAllBinaryNodeChildren, getBinaryNodeChild, getBinaryNodeChildren, isJidGroup, isJidUser, jidDecode, jidNormalizedUser, S_WHATSAPP_NET } from '../WABinary'
@@ -286,7 +286,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			const update = getBinaryNodeChild(node, 'collection')
 			if(update) {
 				const name = update.attrs.name as WAPatchName
-				await resyncAppState([name], undefined)
+				await resyncAppState([name], false)
 			}
 
 			break
@@ -312,6 +312,25 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					...result.key || {},
 					participant: setPicture?.attrs.author
 				}
+			}
+
+			break
+		case 'account_sync':
+			if(child.tag === 'disappearing_mode') {
+				const newDuration = +child.attrs.duration
+				const timestamp = +child.attrs.t
+
+				logger.info({ newDuration }, 'updated account disappearing mode')
+
+				ev.emit('creds.update', {
+					accountSettings: {
+						...authState.creds.accountSettings,
+						defaultDisappearingMode: {
+							ephemeralExpiration: newDuration,
+							ephemeralSettingTimestamp: timestamp,
+						},
+					}
+				})
 			}
 
 			break
@@ -529,7 +548,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 
 						// send ack for history message
-						const isAnyHistoryMsg = isHistoryMsg(msg.message!)
+						const isAnyHistoryMsg = getHistoryMsg(msg.message!)
 						if(isAnyHistoryMsg) {
 							const jid = jidNormalizedUser(msg.key.remoteJid!)
 							await sendReceipt(jid, undefined, [msg.key.id!], 'hist_sync')
@@ -598,17 +617,16 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		}
 	}
 
-	const flushBufferIfLastOfflineNode = (
+	/// processes a node with the given function
+	/// and adds the task to the existing buffer if we're buffering events
+	const processNodeWithBuffer = (
 		node: BinaryNode,
 		identifier: string,
 		exec: (node: BinaryNode) => Promise<any>
 	) => {
 		const task = exec(node)
 			.catch(err => onUnexpectedError(err, identifier))
-		const offline = node.attrs.offline
-		if(offline) {
-			ev.processInBuffer(task)
-		}
+		ev.processInBuffer(task)
 	}
 
 	// called when all offline notifs are handled
@@ -618,24 +636,25 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 		logger.info(`handled ${offlineNotifs} offline messages/notifications`)
 		await ev.flush()
+
 		ev.emit('connection.update', { receivedPendingNotifications: true })
 	})
 
 	// recv a message
 	ws.on('CB:message', (node: BinaryNode) => {
-		flushBufferIfLastOfflineNode(node, 'processing message', handleMessage)
+		processNodeWithBuffer(node, 'processing message', handleMessage)
 	})
 
 	ws.on('CB:call', async(node: BinaryNode) => {
-		flushBufferIfLastOfflineNode(node, 'handling call', handleCall)
+		processNodeWithBuffer(node, 'handling call', handleCall)
 	})
 
 	ws.on('CB:receipt', node => {
-		flushBufferIfLastOfflineNode(node, 'handling receipt', handleReceipt)
+		processNodeWithBuffer(node, 'handling receipt', handleReceipt)
 	})
 
 	ws.on('CB:notification', async(node: BinaryNode) => {
-		flushBufferIfLastOfflineNode(node, 'handling notification', handleNotification)
+		processNodeWithBuffer(node, 'handling notification', handleNotification)
 	})
 
 	ws.on('CB:ack,class:message', (node: BinaryNode) => {
