@@ -1,14 +1,12 @@
 import { AxiosRequestConfig } from 'axios'
 import type { Logger } from 'pino'
 import { proto } from '../../WAProto'
-import { AuthenticationCreds, BaileysEventEmitter, Chat, GroupMetadata, InitialReceivedChatsState, ParticipantAction, SignalKeyStoreWithTransaction, WAMessageStubType } from '../Types'
+import { AuthenticationCreds, BaileysEventEmitter, Chat, GroupMetadata, ParticipantAction, SignalKeyStoreWithTransaction, WAMessageStubType } from '../Types'
 import { downloadAndProcessHistorySyncNotification, normalizeMessageContent, toNumber } from '../Utils'
 import { areJidsSameUser, jidNormalizedUser } from '../WABinary'
 
 type ProcessMessageContext = {
-	historyCache: Set<string>
-	recvChats: InitialReceivedChatsState
-	downloadHistory: boolean
+	shouldProcessHistoryMsg: boolean
 	creds: AuthenticationCreds
 	keyStore: SignalKeyStoreWithTransaction
 	ev: BaileysEventEmitter
@@ -16,11 +14,15 @@ type ProcessMessageContext = {
 	options: AxiosRequestConfig<any>
 }
 
-const MSG_MISSED_CALL_TYPES = new Set([
+const REAL_MSG_STUB_TYPES = new Set([
 	WAMessageStubType.CALL_MISSED_GROUP_VIDEO,
 	WAMessageStubType.CALL_MISSED_GROUP_VOICE,
 	WAMessageStubType.CALL_MISSED_VIDEO,
 	WAMessageStubType.CALL_MISSED_VOICE
+])
+
+const REAL_MSG_REQ_ME_STUB_TYPES = new Set([
+	WAMessageStubType.GROUP_PARTICIPANT_ADD
 ])
 
 /** Cleans a received message to further processing */
@@ -50,11 +52,15 @@ export const cleanMessage = (message: proto.IWebMessageInfo, meId: string) => {
 	}
 }
 
-export const isRealMessage = (message: proto.IWebMessageInfo) => {
+export const isRealMessage = (message: proto.IWebMessageInfo, meId: string) => {
 	const normalizedContent = normalizeMessageContent(message.message)
 	return (
 		!!normalizedContent
-		|| MSG_MISSED_CALL_TYPES.has(message.messageStubType!)
+		|| REAL_MSG_STUB_TYPES.has(message.messageStubType!)
+		|| (
+			REAL_MSG_REQ_ME_STUB_TYPES.has(message.messageStubType!)
+			&& message.messageStubParameters?.some(p => areJidsSameUser(meId, p))
+		)
 	)
 	&& !normalizedContent?.protocolMessage
 	&& !normalizedContent?.reactionMessage
@@ -66,64 +72,70 @@ export const shouldIncrementChatUnread = (message: proto.IWebMessageInfo) => (
 
 const processMessage = async(
 	message: proto.IWebMessageInfo,
-	{ downloadHistory, ev, historyCache, recvChats, creds, keyStore, logger, options }: ProcessMessageContext
+	{
+		shouldProcessHistoryMsg,
+		ev,
+		creds,
+		keyStore,
+		logger,
+		options
+	}: ProcessMessageContext
 ) => {
 	const meId = creds.me!.id
 	const { accountSettings } = creds
 
 	const chat: Partial<Chat> = { id: jidNormalizedUser(message.key.remoteJid!) }
+	const isRealMsg = isRealMessage(message, meId)
 
-	if(isRealMessage(message)) {
+	if(isRealMsg) {
 		chat.conversationTimestamp = toNumber(message.messageTimestamp)
 		// only increment unread count if not CIPHERTEXT and from another person
 		if(shouldIncrementChatUnread(message)) {
 			chat.unreadCount = (chat.unreadCount || 0) + 1
 		}
-
-		if(accountSettings?.unarchiveChats) {
-			chat.archive = false
-			chat.readOnly = false
-		}
 	}
 
 	const content = normalizeMessageContent(message.message)
+
+	// unarchive chat if it's a real message, or someone reacted to our message
+	// and we've the unarchive chats setting on
+	if(
+		(isRealMsg || content?.reactionMessage?.key?.fromMe)
+		&& accountSettings?.unarchiveChats
+	) {
+		chat.archived = false
+		chat.readOnly = false
+	}
+
 	const protocolMsg = content?.protocolMessage
 	if(protocolMsg) {
 		switch (protocolMsg.type) {
 		case proto.Message.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION:
 			const histNotification = protocolMsg!.historySyncNotification!
+			const process = shouldProcessHistoryMsg
+			const isLatest = !creds.processedHistoryMessages?.length
 
-			logger?.info({ histNotification, id: message.key.id }, 'got history notification')
+			logger?.info({
+				histNotification,
+				process,
+				id: message.key.id,
+				isLatest,
+			}, 'got history notification')
 
-			if(downloadHistory) {
-				const isLatest = !creds.processedHistoryMessages?.length
-				const { chats, contacts, messages, didProcess } = await downloadAndProcessHistorySyncNotification(
+			if(process) {
+				const data = await downloadAndProcessHistorySyncNotification(
 					histNotification,
-					historyCache,
-					recvChats,
 					options
 				)
 
-				if(chats.length) {
-					ev.emit('chats.set', { chats, isLatest })
-				}
+				ev.emit('messaging-history.set', { ...data, isLatest })
 
-				if(messages.length) {
-					ev.emit('messages.set', { messages, isLatest })
-				}
-
-				if(contacts.length) {
-					ev.emit('contacts.set', { contacts, isLatest })
-				}
-
-				if(didProcess) {
-					ev.emit('creds.update', {
-						processedHistoryMessages: [
-							...(creds.processedHistoryMessages || []),
-							{ key: message.key, messageTimestamp: message.messageTimestamp }
-						]
-					})
-				}
+				ev.emit('creds.update', {
+					processedHistoryMessages: [
+						...(creds.processedHistoryMessages || []),
+						{ key: message.key, messageTimestamp: message.messageTimestamp }
+					]
+				})
 			}
 
 			break
@@ -133,14 +145,20 @@ const processMessage = async(
 				let newAppStateSyncKeyId = ''
 				await keyStore.transaction(
 					async() => {
+						const newKeys: string[] = []
 						for(const { keyData, keyId } of keys) {
 							const strKeyId = Buffer.from(keyId!.keyId!).toString('base64')
+							newKeys.push(strKeyId)
 
-							logger?.info({ strKeyId }, 'injecting new app state sync key')
 							await keyStore.set({ 'app-state-sync-key': { [strKeyId]: keyData! } })
 
 							newAppStateSyncKeyId = strKeyId
 						}
+
+						logger?.info(
+							{ newAppStateSyncKeyId, newKeys },
+							'injecting new app state sync keys'
+						)
 					}
 				)
 
