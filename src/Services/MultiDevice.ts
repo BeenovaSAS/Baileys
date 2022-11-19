@@ -60,6 +60,8 @@ export const connectToWhatsApp = async (req: any, res: any) => {
         case DisconnectReason.loggedOut:
           console.log("Eliminando el archivo");
           await closeSession(id);
+          connectToWhatsApp(req, res);
+
           break;
         case DisconnectReason.multideviceMismatch:
           axios({
