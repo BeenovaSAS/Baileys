@@ -35,6 +35,7 @@ export const connectToWhatsApp = async (req: any, res: any) => {
     version,
     printQRInTerminal: true,
     auth: state,
+    syncFullHistory: false,
   });
   clients[id].ev.on("creds.update", saveCreds);
 
