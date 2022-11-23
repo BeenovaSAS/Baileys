@@ -1,11 +1,11 @@
 import { Boom } from '@hapi/boom'
-import EventEmitter from 'events'
 import { promisify } from 'util'
 import WebSocket from 'ws'
 import { proto } from '../../WAProto'
 import { DEF_CALLBACK_PREFIX, DEF_TAG_PREFIX, DEFAULT_ORIGIN, INITIAL_PREKEY_COUNT, MIN_PREKEY_COUNT } from '../Defaults'
-import { AuthenticationCreds, BaileysEventEmitter, BaileysEventMap, DisconnectReason, SocketConfig } from '../Types'
-import { addTransactionCapability, bindWaitForConnectionUpdate, configureSuccessfulPairing, Curve, generateLoginNode, generateMdTagPrefix, generateRegistrationNode, getErrorCodeFromStreamError, getNextPreKeysNode, makeNoiseHandler, printQRIfNecessaryListener, promiseTimeout } from '../Utils'
+import { DisconnectReason, SocketConfig } from '../Types'
+import { addTransactionCapability, bindWaitForConnectionUpdate, configureSuccessfulPairing, Curve, generateLoginNode, generateMdTagPrefix, generateRegistrationNode, getCodeFromWSError, getErrorCodeFromStreamError, getNextPreKeysNode, makeNoiseHandler, printQRIfNecessaryListener, promiseTimeout } from '../Utils'
+import { makeEventBuffer } from '../Utils/event-buffer'
 import { assertNodeErrorFree, BinaryNode, encodeBinaryNode, getBinaryNodeChild, getBinaryNodeChildren, S_WHATSAPP_NET } from '../WABinary'
 
 /**
@@ -25,16 +25,20 @@ export const makeSocket = ({
 	auth: authState,
 	printQRInTerminal,
 	defaultQueryTimeoutMs,
-	transactionOpts
+	syncFullHistory,
+	transactionOpts,
+	qrTimeout,
+	options,
 }: SocketConfig) => {
 	const ws = new WebSocket(waWebSocketUrl, undefined, {
 		origin: DEFAULT_ORIGIN,
+		headers: options.headers,
 		handshakeTimeout: connectTimeoutMs,
 		timeout: connectTimeoutMs,
 		agent
 	})
 	ws.setMaxListeners(0)
-	const ev = new EventEmitter() as BaileysEventEmitter
+	const ev = makeEventBuffer(logger)
 	/** ephemeral key pair used to encrypt/decrypt communication. Unique for each connection */
 	const ephemeralKeyPair = Curve.generateKeyPair()
 	/** WA noise protocol wrapper */
@@ -48,6 +52,7 @@ export const makeSocket = ({
 	let epoch = 1
 	let keepAliveReq: NodeJS.Timeout
 	let qrTimer: NodeJS.Timeout
+	let closed = false
 
 	const uqTagId = generateMdTagPrefix()
 	const generateMessageTag = () => `${uqTagId}${epoch++}`
@@ -90,7 +95,7 @@ export const makeSocket = ({
 		let onOpen: (data: any) => void
 		let onClose: (err: Error) => void
 
-		const result = new Promise<any>((resolve, reject) => {
+		const result = promiseTimeout<any>(connectTimeoutMs, (resolve, reject) => {
 			onOpen = (data: any) => resolve(data)
 			onClose = reject
 			ws.on('frame', onOpen)
@@ -104,7 +109,7 @@ export const makeSocket = ({
 			})
 
 		if(sendMsg) {
-			sendRawMessage(sendMsg).catch(onClose)
+			sendRawMessage(sendMsg).catch(onClose!)
 		}
 
 		return result
@@ -134,9 +139,9 @@ export const makeSocket = ({
 			)
 			return result as any
 		} finally {
-			ws.off(`TAG:${msgId}`, onRecv)
-			ws.off('close', onErr) // if the socket closes, you'll never receive the message
-			ws.off('error', onErr)
+			ws.off(`TAG:${msgId}`, onRecv!)
+			ws.off('close', onErr!) // if the socket closes, you'll never receive the message
+			ws.off('error', onErr!)
 		}
 	}
 
@@ -166,7 +171,7 @@ export const makeSocket = ({
 		}
 		helloMsg = proto.HandshakeMessage.fromObject(helloMsg)
 
-		logger.info({ browser, helloMsg, registrationId: creds.registrationId }, 'connected to WA Web')
+		logger.info({ browser, helloMsg }, 'connected to WA Web')
 
 		const init = proto.HandshakeMessage.encode(helloMsg).finish()
 
@@ -177,12 +182,14 @@ export const makeSocket = ({
 
 		const keyEnc = noise.processHandshake(handshake, creds.noiseKey)
 
+		const config = { version, browser, syncFullHistory }
+
 		let node: proto.IClientPayload
 		if(!creds.me) {
-			node = generateRegistrationNode(creds, { version, browser })
+			node = generateRegistrationNode(creds, config)
 			logger.info({ node }, 'not logged in, attempting registration...')
 		} else {
-			node = generateLoginNode(creds.me!.id, { version, browser })
+			node = generateLoginNode(creds.me!.id, config)
 			logger.info({ node }, 'logging in...')
 		}
 
@@ -215,7 +222,7 @@ export const makeSocket = ({
 			]
 		})
 		const countChild = getBinaryNodeChild(result, 'count')
-		return +countChild.attrs.value
+		return +countChild!.attrs.value
 	}
 
 	/** generates and uploads a set of pre-keys to the server */
@@ -280,8 +287,14 @@ export const makeSocket = ({
 	}
 
 	const end = (error: Error | undefined) => {
+		if(closed) {
+			logger.trace({ trace: error?.stack }, 'connection already closed')
+			return
+		}
+
+		closed = true
 		logger.info(
-			{ error, trace: error?.stack },
+			{ trace: error?.stack },
 			error ? 'connection errored' : 'connection closed'
 		)
 
@@ -384,14 +397,8 @@ export const makeSocket = ({
 		})
 	)
 
-	const emitEventsFromMap = (map: Partial<BaileysEventMap<AuthenticationCreds>>) => {
-		for(const key in map) {
-			ev.emit(key as any, map[key])
-		}
-	}
-
 	/** logout & invalidate connection */
-	const logout = async() => {
+	const logout = async(msg?: string) => {
 		const jid = authState.creds.me?.id
 		if(jid) {
 			await sendNode({
@@ -414,12 +421,24 @@ export const makeSocket = ({
 			})
 		}
 
-		end(new Boom('Intentional Logout', { statusCode: DisconnectReason.loggedOut }))
+		end(new Boom(msg || 'Intentional Logout', { statusCode: DisconnectReason.loggedOut }))
 	}
 
 	ws.on('message', onMessageRecieved)
-	ws.on('open', validateConnection)
-	ws.on('error', error => end(new Boom(`WebSocket Error (${error.message})`, { statusCode: 500, data: error })))
+	ws.on('open', async() => {
+		try {
+			await validateConnection()
+		} catch(err) {
+			logger.error({ err }, 'error in validating connection')
+			end(err)
+		}
+	})
+	ws.on('error', error => end(
+		new Boom(
+			`WebSocket Error (${error.message})`,
+			{ statusCode: getCodeFromWSError(error), data: error }
+		)
+	))
 	ws.on('close', () => end(new Boom('Connection Terminated', { statusCode: DisconnectReason.connectionClosed })))
 	// the server terminated the connection
 	ws.on('CB:xmlstreamend', () => end(new Boom('Connection Terminated by Server', { statusCode: DisconnectReason.connectionClosed })))
@@ -441,7 +460,7 @@ export const makeSocket = ({
 		const identityKeyB64 = Buffer.from(creds.signedIdentityKey.public).toString('base64')
 		const advB64 = creds.advSecretKey
 
-		let qrMs = 60_000 // time to let a QR live
+		let qrMs = qrTimeout || 60_000 // time to let a QR live
 		const genPairQR = () => {
 			if(ws.readyState !== ws.OPEN) {
 				return
@@ -459,7 +478,7 @@ export const makeSocket = ({
 			ev.emit('connection.update', { qr })
 
 			qrTimer = setTimeout(genPairQR, qrMs)
-			qrMs = 20_000 // shorter subsequent qrs
+			qrMs = qrTimeout || 20_000 // shorter subsequent qrs
 		}
 
 		genPairQR()
@@ -496,15 +515,6 @@ export const makeSocket = ({
 		ev.emit('connection.update', { connection: 'open' })
 	})
 
-	ws.on('CB:ib,,offline', (node: BinaryNode) => {
-		const child = getBinaryNodeChild(node, 'offline')
-		const offlineCount = +child.attrs.count
-
-		logger.info(`got ${offlineCount} offline messages/notifications`)
-
-		ev.emit('connection.update', { receivedPendingNotifications: true })
-	})
-
 	ws.on('CB:stream:error', (node: BinaryNode) => {
 		logger.error({ node }, 'stream errored out')
 
@@ -523,17 +533,19 @@ export const makeSocket = ({
 	})
 
 	process.nextTick(() => {
+		// start buffering important events
+		ev.buffer()
 		ev.emit('connection.update', { connection: 'connecting', receivedPendingNotifications: false, qr: undefined })
 	})
 	// update credentials when required
 	ev.on('creds.update', update => {
 		const name = update.me?.name
 		// if name has just been received
-		if(!creds.me?.name && name) {
-			logger.info({ name }, 'updated pushName')
+		if(creds.me?.name !== name) {
+			logger.debug({ name }, 'updated pushName')
 			sendNode({
 				tag: 'presence',
-				attrs: { name }
+				attrs: { name: name! }
 			})
 				.catch(err => {
 					logger.warn({ trace: err.stack }, 'error in sending presence update on name change')
@@ -555,7 +567,6 @@ export const makeSocket = ({
 		get user() {
 			return authState.creds.me
 		},
-		emitEventsFromMap,
 		generateMessageTag,
 		query,
 		waitForMessage,
@@ -567,7 +578,7 @@ export const makeSocket = ({
 		onUnexpectedError,
 		uploadPreKeys,
 		/** Waits for the connection to WA to reach a state */
-		waitForConnectionUpdate: bindWaitForConnectionUpdate(ev)
+		waitForConnectionUpdate: bindWaitForConnectionUpdate(ev),
 	}
 }
 

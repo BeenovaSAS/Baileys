@@ -1,16 +1,18 @@
 import { Boom } from '@hapi/boom'
 import { proto } from '../../WAProto'
-import { AppStateChunk, ChatModification, ChatMutation, LTHashState, PresenceData, SocketConfig, WABusinessHoursConfig, WABusinessProfile, WAMediaUpload, WAPatchCreate, WAPatchName, WAPresence } from '../Types'
-import { chatModificationToAppPatch, decodePatches, decodeSyncdSnapshot, encodeSyncdPatch, extractSyncdPatches, generateProfilePicture, newLTHashState, processSyncActions } from '../Utils'
+import { PROCESSABLE_HISTORY_TYPES } from '../Defaults'
+import { ALL_WA_PATCH_NAMES, ChatModification, ChatMutation, LTHashState, MessageUpsertType, PresenceData, SocketConfig, WABusinessHoursConfig, WABusinessProfile, WAMediaUpload, WAMessage, WAPatchCreate, WAPatchName, WAPresence } from '../Types'
+import { chatModificationToAppPatch, decodePatches, decodeSyncdSnapshot, encodeSyncdPatch, extractSyncdPatches, generateProfilePicture, getHistoryMsg, newLTHashState, processSyncAction } from '../Utils'
 import { makeMutex } from '../Utils/make-mutex'
+import processMessage from '../Utils/process-message'
 import { BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, jidNormalizedUser, reduceBinaryNodeToDictionary, S_WHATSAPP_NET } from '../WABinary'
-import { makeMessagesSocket } from './messages-send'
+import { makeSocket } from './socket'
 
 const MAX_SYNC_ATTEMPTS = 5
 
 export const makeChatsSocket = (config: SocketConfig) => {
-	const { logger, markOnlineOnConnect } = config
-	const sock = makeMessagesSocket(config)
+	const { logger, markOnlineOnConnect, shouldSyncHistoryMessage, fireInitQueries } = config
+	const sock = makeSocket(config)
 	const {
 		ev,
 		ws,
@@ -18,16 +20,37 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		generateMessageTag,
 		sendNode,
 		query,
-		fetchPrivacySettings,
 		onUnexpectedError,
-		emitEventsFromMap,
+		logout
 	} = sock
 
-	const mutationMutex = makeMutex()
+	let privacySettings: { [_: string]: string } | undefined
+	/** this mutex ensures that the notifications (receipts, messages etc.) are processed in order */
+	const processingMutex = makeMutex()
+
 	/** helper function to fetch the given app state sync key */
 	const getAppStateSyncKey = async(keyId: string) => {
 		const { [keyId]: key } = await authState.keys.get('app-state-sync-key', [keyId])
 		return key
+	}
+
+	const fetchPrivacySettings = async(force: boolean = false) => {
+		if(!privacySettings || force) {
+			const { content } = await query({
+				tag: 'iq',
+				attrs: {
+					xmlns: 'privacy',
+					to: S_WHATSAPP_NET,
+					type: 'get'
+				},
+				content: [
+					{ tag: 'privacy', attrs: { } }
+				]
+			})
+			privacySettings = reduceBinaryNodeToDictionary(content?.[0] as BinaryNode, 'category')
+		}
+
+		return privacySettings
 	}
 
 	/** helper function to run a generic IQ query */
@@ -92,7 +115,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 
 		return results.map(user => {
 			const contact = getBinaryNodeChild(user, 'contact')
-			return { exists: contact.attrs.type === 'in', jid: user.attrs.jid }
+			return { exists: contact?.attrs.type === 'in', jid: user.attrs.jid }
 		}).filter(item => item.exists)
 	}
 
@@ -104,8 +127,8 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		if(result) {
 			const status = getBinaryNodeChild(result, 'status')
 			return {
-				status: status.content!.toString(),
-				setAt: new Date(+status.attrs.t * 1000)
+				status: status?.content!.toString(),
+				setAt: new Date(+(status?.attrs.t || 0) * 1000)
 			}
 		}
 	}
@@ -130,6 +153,29 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		})
 	}
 
+	/** update the profile status for yourself */
+	const updateProfileStatus = async(status: string) => {
+		await query({
+			tag: 'iq',
+			attrs: {
+				to: S_WHATSAPP_NET,
+				type: 'set',
+				xmlns: 'status'
+			},
+			content: [
+				{
+					tag: 'status',
+					attrs: { },
+					content: Buffer.from(status, 'utf-8')
+				}
+			]
+		})
+	}
+
+	const updateProfileName = async(name: string) => {
+		await chatModify({ pushNameSetting: name }, '')
+	}
+
 	const fetchBlocklist = async() => {
 		const result = await query({
 			tag: 'iq',
@@ -139,8 +185,10 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				type: 'get'
 			}
 		})
-		const child = result.content?.[0] as BinaryNode
-		return (child.content as BinaryNode[])?.map(i => i.attrs.jid)
+
+		const listNode = getBinaryNodeChild(result, 'list')
+		return getBinaryNodeChildren(listNode, 'item')
+			.map(n => n.attrs.jid)
 	}
 
 	const updateBlockStatus = async(jid: string, action: 'block' | 'unblock') => {
@@ -191,18 +239,19 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			const category = getBinaryNodeChild(getBinaryNodeChild(profiles, 'categories'), 'category')
 			const business_hours = getBinaryNodeChild(profiles, 'business_hours')
 			const business_hours_config = business_hours && getBinaryNodeChildren(business_hours, 'business_hours_config')
+			const websiteStr = website?.content?.toString()
 			return {
 				wid: profiles.attrs?.jid,
-				address: address?.content.toString(),
-				description: description?.content.toString(),
-				website: [website?.content.toString()],
-				email: email?.content.toString(),
-				category: category?.content.toString(),
+				address: address?.content?.toString(),
+				description: description?.content?.toString() || '',
+				website: websiteStr ? [websiteStr] : [],
+				email: email?.content?.toString(),
+				category: category?.content?.toString(),
 				business_hours: {
 					timezone: business_hours?.attrs?.timezone,
 					business_config: business_hours_config?.map(({ attrs }) => attrs as unknown as WABusinessHoursConfig)
 				}
-			} as unknown as WABusinessProfile
+			}
 		}
 	}
 
@@ -228,8 +277,22 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		})
 	}
 
-	const resyncAppState = async(collections: WAPatchName[]) => {
-		const appStateChunk: AppStateChunk = { totalMutations: [], collectionsToHandle: [] }
+	const newAppStateChunkHandler = (isInitialSync: boolean) => {
+		return {
+			onMutation(mutation: ChatMutation) {
+				processSyncAction(
+					mutation,
+					ev,
+					authState.creds.me!,
+					isInitialSync ? { accountSettings: authState.creds.accountSettings } : undefined,
+					logger
+				)
+			}
+		}
+	}
+
+	const resyncAppState = ev.createBufferedFunction(async(collections: readonly WAPatchName[], isInitialSync: boolean) => {
+		const { onMutation } = newAppStateChunkHandler(isInitialSync)
 		// we use this to determine which events to fire
 		// otherwise when we resync from scratch -- all notifications will fire
 		const initialVersionMap: { [T in WAPatchName]?: number } = { }
@@ -289,28 +352,33 @@ export const makeChatsSocket = (config: SocketConfig) => {
 						]
 					})
 
-					const decoded = await extractSyncdPatches(result) // extract from binary node
+					const decoded = await extractSyncdPatches(result, config?.options) // extract from binary node
 					for(const key in decoded) {
 						const name = key as WAPatchName
 						const { patches, hasMorePatches, snapshot } = decoded[name]
 						try {
 							if(snapshot) {
-								const { state: newState, mutations } = await decodeSyncdSnapshot(name, snapshot, getAppStateSyncKey, initialVersionMap[name])
+								const { state: newState } = await decodeSyncdSnapshot(name, snapshot, getAppStateSyncKey, initialVersionMap[name], onMutation)
 								states[name] = newState
 
 								logger.info(
-									{ mutations: logger.level === 'trace' ? mutations : undefined },
-									`restored state of ${name} from snapshot to v${newState.version} with ${mutations.length} mutations`
+									`restored state of ${name} from snapshot to v${newState.version} with mutations`
 								)
 
 								await authState.keys.set({ 'app-state-sync-version': { [name]: newState } })
-
-								appStateChunk.totalMutations.push(...mutations)
 							}
 
 							// only process if there are syncd patches
 							if(patches.length) {
-								const { newMutations, state: newState } = await decodePatches(name, patches, states[name], getAppStateSyncKey, initialVersionMap[name])
+								const { newMutations, state: newState } = await decodePatches(
+									name,
+									patches,
+									states[name],
+									getAppStateSyncKey,
+									onMutation,
+									config.options,
+									initialVersionMap[name]
+								)
 
 								await authState.keys.set({ 'app-state-sync-version': { [name]: newState } })
 
@@ -318,8 +386,6 @@ export const makeChatsSocket = (config: SocketConfig) => {
 								if(newMutations.length) {
 									logger.trace({ newMutations, name }, 'recv new mutations')
 								}
-
-								appStateChunk.totalMutations.push(...newMutations)
 							}
 
 							if(hasMorePatches) {
@@ -328,13 +394,15 @@ export const makeChatsSocket = (config: SocketConfig) => {
 								collectionsToHandle.delete(name)
 							}
 						} catch(error) {
-							logger.info({ name, error: error.stack }, 'failed to sync state from version, removing and trying from scratch')
+							// if retry attempts overshoot
+							// or key not found
+							const isIrrecoverableError = attemptsMap[name]! >= MAX_SYNC_ATTEMPTS || error.output?.statusCode === 404
+							logger.info({ name, error: error.stack }, `failed to sync state from version${isIrrecoverableError ? '' : ', removing and trying from scratch'}`)
 							await authState.keys.set({ 'app-state-sync-version': { [name]: null } })
 							// increment number of retries
 							attemptsMap[name] = (attemptsMap[name] || 0) + 1
-							// if retry attempts overshoot
-							// or key not found
-							if(attemptsMap[name] >= MAX_SYNC_ATTEMPTS || error.output?.statusCode === 404) {
+
+							if(isIrrecoverableError) {
 								// stop retrying
 								collectionsToHandle.delete(name)
 							}
@@ -343,11 +411,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				}
 			}
 		)
-
-		processSyncActionsLocal(appStateChunk.totalMutations)
-
-		return appStateChunk
-	}
+	})
 
 	/**
      * fetch the profile picture of a user/group
@@ -393,7 +457,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				tag: 'chatstate',
 				attrs: {
 					from: me!.id!,
-					to: toJid,
+					to: toJid!,
 				},
 				content: [
 					{
@@ -417,13 +481,13 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	)
 
 	const handlePresenceUpdate = ({ tag, attrs, content }: BinaryNode) => {
-		let presence: PresenceData
+		let presence: PresenceData | undefined
 		const jid = attrs.from
 		const participant = attrs.participant || attrs.from
 		if(tag === 'presence') {
 			presence = {
 				lastKnownPresence: attrs.type === 'unavailable' ? 'unavailable' : 'available',
-				lastSeen: attrs.last ? +attrs.last : undefined
+				lastSeen: attrs.last && attrs.last !== 'deny' ? +attrs.last : undefined
 			}
 		} else if(Array.isArray(content)) {
 			const [firstChild] = content
@@ -446,34 +510,6 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		}
 	}
 
-	const resyncMainAppState = async() => {
-		logger.debug('resyncing main app state')
-
-		await (
-			mutationMutex.mutex(
-				() => resyncAppState([
-					'critical_block',
-					'critical_unblock_low',
-					'regular_high',
-					'regular_low',
-					'regular'
-				])
-			)
-				.catch(err => (
-					onUnexpectedError(err, 'main app sync')
-				))
-		)
-	}
-
-	const processSyncActionsLocal = (actions: ChatMutation[]) => {
-		const events = processSyncActions(actions, authState.creds.me!, logger)
-		emitEventsFromMap(events)
-		// resend available presence to update name on servers
-		if(events['creds.update']?.me?.name && markOnlineOnConnect) {
-			sendPresenceUpdate('available')
-		}
-	}
-
 	const appPatch = async(patchCreate: WAPatchCreate) => {
 		const name = patchCreate.type
 		const myAppStateKeyId = authState.creds.myAppStateKeyId
@@ -484,13 +520,13 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		let initial: LTHashState
 		let encodeResult: { patch: proto.ISyncdPatch, state: LTHashState }
 
-		await mutationMutex.mutex(
+		await processingMutex.mutex(
 			async() => {
 				await authState.keys.transaction(
 					async() => {
 						logger.debug({ patch: patchCreate }, 'applying app patch')
 
-						await resyncAppState([name])
+						await resyncAppState([name], false)
 
 						const { [name]: currentSyncVersion } = await authState.keys.get('app-state-sync-version', [name])
 						initial = currentSyncVersion || newLTHashState()
@@ -543,8 +579,17 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		)
 
 		if(config.emitOwnEvents) {
-			const result = await decodePatches(name, [{ ...encodeResult.patch, version: { version: encodeResult.state.version }, }], initial, getAppStateSyncKey)
-			processSyncActionsLocal(result.newMutations)
+			const { onMutation } = newAppStateChunkHandler(false)
+			await decodePatches(
+				name,
+				[{ ...encodeResult!.patch, version: { version: encodeResult!.state.version }, }],
+				initial!,
+				getAppStateSyncKey,
+				onMutation,
+				config.options,
+				undefined,
+				logger,
+			)
 		}
 	}
 
@@ -614,21 +659,77 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	 * queries need to be fired on connection open
 	 * help ensure parity with WA Web
 	 * */
-	const fireInitQueries = async() => {
+	const executeInitQueries = async() => {
 		await Promise.all([
 			fetchAbt(),
 			fetchProps(),
 			fetchBlocklist(),
 			fetchPrivacySettings(),
-			sendPresenceUpdate(markOnlineOnConnect ? 'available' : 'unavailable')
 		])
 	}
+
+	const upsertMessage = ev.createBufferedFunction(async(msg: WAMessage, type: MessageUpsertType) => {
+		ev.emit('messages.upsert', { messages: [msg], type })
+
+		if(!!msg.pushName) {
+			let jid = msg.key.fromMe ? authState.creds.me!.id : (msg.key.participant || msg.key.remoteJid)
+			jid = jidNormalizedUser(jid!)
+
+			if(!msg.key.fromMe) {
+				ev.emit('contacts.update', [{ id: jid, notify: msg.pushName, verifiedName: msg.verifiedBizName! }])
+			}
+
+			// update our pushname too
+			if(msg.key.fromMe && msg.pushName && authState.creds.me?.name !== msg.pushName) {
+				ev.emit('creds.update', { me: { ...authState.creds.me!, name: msg.pushName! } })
+			}
+		}
+
+		const historyMsg = getHistoryMsg(msg.message!)
+		const shouldProcessHistoryMsg = historyMsg
+			? (
+				shouldSyncHistoryMessage(historyMsg)
+				&& PROCESSABLE_HISTORY_TYPES.includes(historyMsg.syncType!)
+			)
+			: false
+		// we should have app state keys before we process any history
+		if(shouldProcessHistoryMsg) {
+			if(!authState.creds.myAppStateKeyId) {
+				logger.warn('myAppStateKeyId not synced, bad link')
+				await logout('Incomplete app state key sync')
+				return
+			}
+		}
+
+		await Promise.all([
+			(async() => {
+				if(shouldProcessHistoryMsg && !authState.creds.accountSyncCounter) {
+					logger.info('doing initial app state sync')
+					await resyncAppState(ALL_WA_PATCH_NAMES, true)
+
+					const accountSyncCounter = (authState.creds.accountSyncCounter || 0) + 1
+					ev.emit('creds.update', { accountSyncCounter })
+				}
+			})(),
+			processMessage(
+				msg,
+				{
+					shouldProcessHistoryMsg,
+					ev,
+					creds: authState.creds,
+					keyStore: authState.keys,
+					logger,
+					options: config.options,
+				}
+			)
+		])
+	})
 
 	ws.on('CB:presence', handlePresenceUpdate)
 	ws.on('CB:chatstate', handlePresenceUpdate)
 
 	ws.on('CB:ib,,dirty', async(node: BinaryNode) => {
-		const { attrs } = getBinaryNodeChild(node, 'dirty')
+		const { attrs } = getBinaryNodeChild(node, 'dirty')!
 		const type = attrs.type
 		switch (type) {
 		case 'account_sync':
@@ -649,28 +750,27 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		}
 	})
 
-	ws.on('CB:notification,type:server_sync', (node: BinaryNode) => {
-		const update = getBinaryNodeChild(node, 'collection')
-		if(update) {
-			const name = update.attrs.name as WAPatchName
-			mutationMutex.mutex(() => (
-				resyncAppState([name])
-					.catch(err => logger.error({ trace: err.stack, node }, 'failed to sync state'))
-			))
-		}
-	})
-
 	ev.on('connection.update', ({ connection }) => {
 		if(connection === 'open') {
-			fireInitQueries()
+			if(fireInitQueries) {
+				executeInitQueries()
+					.catch(
+						error => onUnexpectedError(error, 'init queries')
+					)
+			}
+
+			sendPresenceUpdate(markOnlineOnConnect ? 'available' : 'unavailable')
 				.catch(
-					error => onUnexpectedError(error, 'connection open requests')
+					error => onUnexpectedError(error, 'presence update requests')
 				)
 		}
 	})
 
 	return {
 		...sock,
+		processingMutex,
+		fetchPrivacySettings,
+		upsertMessage,
 		appPatch,
 		sendPresenceUpdate,
 		presenceSubscribe,
@@ -679,10 +779,11 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		fetchBlocklist,
 		fetchStatus,
 		updateProfilePicture,
+		updateProfileStatus,
+		updateProfileName,
 		updateBlockStatus,
 		getBusinessProfile,
 		resyncAppState,
-		chatModify,
-		resyncMainAppState,
+		chatModify
 	}
 }

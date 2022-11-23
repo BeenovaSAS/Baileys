@@ -1,6 +1,6 @@
 
 import * as constants from './constants'
-import { jidDecode } from './jid-utils'
+import { FullJid, jidDecode } from './jid-utils'
 import type { BinaryNode, BinaryNodeCodingOptions } from './types'
 
 export const encodeBinaryNode = (
@@ -22,6 +22,10 @@ export const encodeBinaryNode = (
 	const pushBytes = (bytes: Uint8Array | Buffer | number[]) => (
 		bytes.forEach (b => buffer.push(b))
 	)
+	const pushInt16 = (value: number) => {
+		pushBytes([(value >> 8) & 0xff, value & 0xff])
+	}
+
 	const pushInt20 = (value: number) => (
 		pushBytes([(value >> 16) & 0x0f, (value >> 8) & 0xff, value & 0xff])
 	)
@@ -48,7 +52,7 @@ export const encodeBinaryNode = (
 		pushBytes(bytes)
 	}
 
-	const writeJid = ({ agent, device, user, server }: ReturnType<typeof jidDecode>) => {
+	const writeJid = ({ agent, device, user, server }: FullJid) => {
 		if(typeof agent !== 'undefined' || typeof device !== 'undefined') {
 			pushByte(TAGS.AD_JID)
 			pushByte(agent || 0)
@@ -166,7 +170,6 @@ export const encodeBinaryNode = (
 	}
 
 	const writeString = (str: string) => {
-		// console.log('before write of ', str, ' ', Buffer.from(buffer).toString('hex'))
 		const tokenIndex = TOKEN_MAP[str]
 		if(tokenIndex) {
 			if(typeof tokenIndex.dict === 'number') {
@@ -194,7 +197,8 @@ export const encodeBinaryNode = (
 		} else if(listSize < 256) {
 			pushBytes([TAGS.LIST_8, listSize])
 		} else {
-			pushBytes([TAGS.LIST_16, listSize])
+			pushByte(TAGS.LIST_16)
+			pushInt16(listSize)
 		}
 	}
 
@@ -202,7 +206,7 @@ export const encodeBinaryNode = (
 		typeof attrs[k] !== 'undefined' && attrs[k] !== null
 	))
 
-	writeListStart(2 * validAttributes.length + 1 + (typeof content !== 'undefined' && content !== null ? 1 : 0))
+	writeListStart(2 * validAttributes.length + 1 + (typeof content !== 'undefined' ? 1 : 0))
 	writeString(tag)
 
 	for(const key of validAttributes) {
@@ -220,11 +224,9 @@ export const encodeBinaryNode = (
 	} else if(Array.isArray(content)) {
 		writeListStart(content.length)
 		for(const item of content) {
-			if(item) {
-				encodeBinaryNode(item, opts, buffer)
-			}
+			encodeBinaryNode(item, opts, buffer)
 		}
-	} else if(typeof content === 'undefined' || content === null) {
+	} else if(typeof content === 'undefined') {
 		// do nothing
 	} else {
 		throw new Error(`invalid children for header "${tag}": ${content} (${typeof content})`)

@@ -101,7 +101,7 @@ export const signalStorage = ({ creds, keys }: SignalAuthState) => ({
 		}
 	},
 	removePreKey: (id: number) => keys.set({ 'pre-key': { [id]: null } }),
-	loadSignedPreKey: (keyId: number) => {
+	loadSignedPreKey: () => {
 		const key = creds.signedPreKey
 		return {
 			privKey: Buffer.from(key.keyPair.private),
@@ -138,11 +138,11 @@ export const decryptGroupSignalProto = (group: string, user: string, msg: Buffer
 
 export const processSenderKeyMessage = async(
 	authorJid: string,
-	item: proto.ISenderKeyDistributionMessage,
+	item: proto.Message.ISenderKeyDistributionMessage,
 	auth: SignalAuthState
 ) => {
 	const builder = new GroupSessionBuilder(signalStorage(auth))
-	const senderName = jidToSignalSenderKeyName(item.groupId, authorJid)
+	const senderName = jidToSignalSenderKeyName(item.groupId!, authorJid)
 
 	const senderMsg = new SenderKeyDistributionMessage(null, null, null, null, item.axolotlSenderKeyDistributionMessage)
 	const { [senderName]: senderKey } = await auth.keys.get('sender-key', [senderName])
@@ -175,11 +175,9 @@ export const encryptSignalProto = async(user: string, buffer: Buffer, auth: Sign
 	const addr = jidToSignalProtocolAddress(user)
 	const cipher = new libsignal.SessionCipher(signalStorage(auth), addr)
 
-	const { type, body } = await cipher.encrypt(buffer)
-	return {
-		type: type === 3 ? 'pkmsg' : 'msg',
-		ciphertext: Buffer.from(body, 'binary')
-	}
+	const { type: sigType, body } = await cipher.encrypt(buffer)
+	const type = sigType === 3 ? 'pkmsg' : 'msg'
+	return { type, ciphertext: Buffer.from(body, 'binary') }
 }
 
 export const encryptSenderKeyMsgSignalProto = async(group: string, data: Uint8Array | Buffer, meId: string, auth: SignalAuthState) => {
@@ -205,9 +203,7 @@ export const parseAndInjectE2ESessions = async(node: BinaryNode, auth: SignalAut
 	const extractKey = (key: BinaryNode) => (
 		key ? ({
 			keyId: getBinaryNodeChildUInt(key, 'id', 3),
-			publicKey: generateSignalPubKey(
-				getBinaryNodeChildBuffer(key, 'value')
-			),
+			publicKey: generateSignalPubKey(getBinaryNodeChildBuffer(key, 'value')!),
 			signature: getBinaryNodeChildBuffer(key, 'signature'),
 		}) : undefined
 	)
@@ -219,9 +215,9 @@ export const parseAndInjectE2ESessions = async(node: BinaryNode, auth: SignalAut
 	await Promise.all(
 		nodes.map(
 			async node => {
-				const signedKey = getBinaryNodeChild(node, 'skey')
-				const key = getBinaryNodeChild(node, 'key')
-				const identity = getBinaryNodeChildBuffer(node, 'identity')
+				const signedKey = getBinaryNodeChild(node, 'skey')!
+				const key = getBinaryNodeChild(node, 'key')!
+				const identity = getBinaryNodeChildBuffer(node, 'identity')!
 				const jid = node.attrs.jid
 				const registrationId = getBinaryNodeChildUInt(node, 'registration', 4)
 
@@ -239,13 +235,13 @@ export const parseAndInjectE2ESessions = async(node: BinaryNode, auth: SignalAut
 }
 
 export const extractDeviceJids = (result: BinaryNode, myJid: string, excludeZeroDevices: boolean) => {
-	const { user: myUser, device: myDevice } = jidDecode(myJid)
+	const { user: myUser, device: myDevice } = jidDecode(myJid)!
 	const extracted: JidWithDevice[] = []
 	for(const node of result.content as BinaryNode[]) {
 		const list = getBinaryNodeChild(node, 'list')?.content
 		if(list && Array.isArray(list)) {
 			for(const item of list) {
-				const { user } = jidDecode(item.attrs.jid)
+				const { user } = jidDecode(item.attrs.jid)!
 				const devicesNode = getBinaryNodeChild(item, 'devices')
 				const deviceListNode = getBinaryNodeChild(devicesNode, 'device-list')
 				if(Array.isArray(deviceListNode?.content)) {

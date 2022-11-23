@@ -1,5 +1,5 @@
 import { Boom } from '@hapi/boom'
-import makeWASocket, { AnyMessageContent, delay, DisconnectReason, fetchLatestBaileysVersion, makeInMemoryStore, MessageRetryMap, useMultiFileAuthState } from '../src'
+import makeWASocket, { AnyMessageContent, delay, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, makeInMemoryStore, MessageRetryMap, useMultiFileAuthState } from '../src'
 import MAIN_LOGGER from '../src/Utils/logger'
 
 const logger = MAIN_LOGGER.child({ })
@@ -32,10 +32,21 @@ const startSock = async() => {
 		version,
 		logger,
 		printQRInTerminal: true,
-		auth: state,
+		auth: {
+			creds: state.creds,
+			/** caching makes the store faster to send/recv messages */
+			keys: makeCacheableSignalKeyStore(state.keys, logger),
+		},
 		msgRetryCounterMap,
+		generateHighQualityLinkPreview: true,
 		// implement to handle retries
 		getMessage: async key => {
+			if(store) {
+				const msg = await store.loadMessage(key.remoteJid!, key.id!)
+				return msg?.message || undefined
+			}
+
+			// only if store is present
 			return {
 				conversation: 'hello'
 			}
@@ -56,45 +67,96 @@ const startSock = async() => {
 		await sock.sendMessage(jid, msg)
 	}
 
-	sock.ev.on('call', item => console.log('recv call event', item))
-	sock.ev.on('chats.set', item => console.log(`recv ${item.chats.length} chats (is latest: ${item.isLatest})`))
-	sock.ev.on('messages.set', item => console.log(`recv ${item.messages.length} messages (is latest: ${item.isLatest})`))
-	sock.ev.on('contacts.set', item => console.log(`recv ${item.contacts.length} contacts`))
+	// the process function lets you process all events that just occurred
+	// efficiently in a batch
+	sock.ev.process(
+		// events is a map for event name => event data
+		async(events) => {
+			// something about the connection changed
+			// maybe it closed, or we received all offline message or connection opened
+			if(events['connection.update']) {
+				const update = events['connection.update']
+				const { connection, lastDisconnect } = update
+				if(connection === 'close') {
+					// reconnect if not logged out
+					if((lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut) {
+						startSock()
+					} else {
+						console.log('Connection closed. You are logged out.')
+					}
+				}
 
-	sock.ev.on('messages.upsert', async m => {
-		console.log(JSON.stringify(m, undefined, 2))
+				console.log('connection update', update)
+			}
 
-		const msg = m.messages[0]
-		if(!msg.key.fromMe && m.type === 'notify' && doReplies) {
-			console.log('replying to', m.messages[0].key.remoteJid)
-			await sock!.sendReadReceipt(msg.key.remoteJid, msg.key.participant, [msg.key.id])
-			await sendMessageWTyping({ text: 'Hello there!' }, msg.key.remoteJid)
-		}
+			// credentials updated -- save them
+			if(events['creds.update']) {
+				await saveCreds()
+			}
 
-	})
+			if(events.call) {
+				console.log('recv call event', events.call)
+			}
 
-	sock.ev.on('messages.update', m => console.log(m))
-	sock.ev.on('message-receipt.update', m => console.log(m))
-	sock.ev.on('presence.update', m => console.log(m))
-	sock.ev.on('chats.update', m => console.log(m))
-	sock.ev.on('chats.delete', m => console.log(m))
-	sock.ev.on('contacts.upsert', m => console.log(m))
+			// history received
+			if(events['messaging-history.set']) {
+				const { chats, contacts, messages, isLatest } = events['messaging-history.set']
+				console.log(`recv ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (is latest: ${isLatest})`)
+			}
 
-	sock.ev.on('connection.update', (update) => {
-		const { connection, lastDisconnect } = update
-		if(connection === 'close') {
-			// reconnect if not logged out
-			if((lastDisconnect.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut) {
-				startSock()
-			} else {
-				console.log('Connection closed. You are logged out.')
+			// received a new message
+			if(events['messages.upsert']) {
+				const upsert = events['messages.upsert']
+				console.log('recv messages ', JSON.stringify(upsert, undefined, 2))
+
+				if(upsert.type === 'notify') {
+					for(const msg of upsert.messages) {
+						if(!msg.key.fromMe && doReplies) {
+							console.log('replying to', msg.key.remoteJid)
+							await sock!.readMessages([msg.key])
+							await sendMessageWTyping({ text: 'Hello there!' }, msg.key.remoteJid!)
+						}
+					}
+				}
+			}
+
+			// messages updated like status delivered, message deleted etc.
+			if(events['messages.update']) {
+				console.log(events['messages.update'])
+			}
+
+			if(events['message-receipt.update']) {
+				console.log(events['message-receipt.update'])
+			}
+
+			if(events['messages.reaction']) {
+				console.log(events['messages.reaction'])
+			}
+
+			if(events['presence.update']) {
+				console.log(events['presence.update'])
+			}
+
+			if(events['chats.update']) {
+				console.log(events['chats.update'])
+			}
+
+			if(events['contacts.update']) {
+				for(const contact of events['contacts.update']) {
+					if(typeof contact.imgUrl !== 'undefined') {
+						const newUrl = contact.imgUrl === null ? null : await sock!.profilePictureUrl(contact.id!)
+						console.log(
+							`contact ${contact.id} has a new profile pic: ${newUrl}`,
+						)
+					}
+				}
+			}
+
+			if(events['chats.delete']) {
+				console.log('chats deleted ', events['chats.delete'])
 			}
 		}
-
-		console.log('connection update', update)
-	})
-	// listen for when the auth credentials is updated
-	sock.ev.on('creds.update', saveCreds)
+	)
 
 	return sock
 }
