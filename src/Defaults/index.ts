@@ -1,5 +1,6 @@
 import { proto } from '../../WAProto'
-import type { MediaType, SocketConfig } from '../Types'
+import { makeLibSignalRepository } from '../Signal/libsignal'
+import type { AuthenticationState, MediaType, SocketConfig, WAVersion } from '../Types'
 import { Browsers } from '../Utils'
 import logger from '../Utils/logger'
 import { version } from './baileys-version.json'
@@ -35,7 +36,7 @@ export const PROCESSABLE_HISTORY_TYPES = [
 ]
 
 export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
-	version: version as any,
+	version: version as WAVersion,
 	browser: Browsers.baileys('Chrome'),
 	waWebSocketUrl: 'wss://web.whatsapp.com/ws/chat',
 	connectTimeoutMs: 20_000,
@@ -47,15 +48,22 @@ export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	customUploadHosts: [],
 	retryRequestDelayMs: 250,
 	fireInitQueries: true,
-	auth: undefined as any,
+	auth: undefined as unknown as AuthenticationState,
 	markOnlineOnConnect: true,
 	syncFullHistory: false,
+	patchMessageBeforeSending: msg => msg,
 	shouldSyncHistoryMessage: () => true,
+	shouldIgnoreJid: () => false,
 	linkPreviewImageThumbnailWidth: 192,
 	transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 3000 },
 	generateHighQualityLinkPreview: false,
 	options: { },
-	getMessage: async() => undefined
+	appStateMacVerification: {
+		patch: false,
+		snapshot: false,
+	},
+	getMessage: async() => undefined,
+	makeSignalRepository: makeLibSignalRepository
 }
 
 export const MEDIA_PATH_MAP: { [T in MediaType]?: string } = {
@@ -94,3 +102,10 @@ export const MEDIA_KEYS = Object.keys(MEDIA_PATH_MAP) as MediaType[]
 export const MIN_PREKEY_COUNT = 5
 
 export const INITIAL_PREKEY_COUNT = 30
+
+export const DEFAULT_CACHE_TTLS = {
+	SIGNAL_STORE: 5 * 60, // 5 minutes
+	MSG_RETRY: 60 * 60, // 1 hour
+	CALL_OFFER: 5 * 60, // 5 minutes
+	USER_DEVICES: 5 * 60, // 5 minutes
+}

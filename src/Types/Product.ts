@@ -2,13 +2,14 @@ import { WAMediaUpload } from './Message'
 
 export type CatalogResult = {
 	data: {
-		paging: { cursors: { before: string, after: string } },
+		paging: { cursors: { before: string, after: string } }
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		data: any[]
 	}
 }
 
 export type ProductCreateResult = {
-	data: { product: any }
+	data: { product: {} }
 }
 
 export type CatalogStatus = {
@@ -70,4 +71,15 @@ export type OrderProduct = {
 export type OrderDetails = {
 	price: OrderPrice
 	products: OrderProduct[]
+}
+
+export type CatalogCursor = string
+
+export type GetCatalogOptions = {
+	/** cursor to start from */
+	cursor?: CatalogCursor
+	/** number of products to fetch */
+	limit?: number
+
+	jid?: string
 }

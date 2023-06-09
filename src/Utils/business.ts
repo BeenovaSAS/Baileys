@@ -7,7 +7,14 @@ import { getStream, getUrlFromDirectPath, toReadable } from './messages-media'
 export const parseCatalogNode = (node: BinaryNode) => {
 	const catalogNode = getBinaryNodeChild(node, 'product_catalog')
 	const products = getBinaryNodeChildren(catalogNode, 'product').map(parseProductNode)
-	return { products }
+	const paging = getBinaryNodeChild(catalogNode, 'paging')
+
+	return {
+		products,
+		nextPageCursor: paging
+			? getBinaryNodeChildString(paging, 'after')
+			: undefined
+	}
 }
 
 export const parseCollectionsNode = (node: BinaryNode) => {
@@ -141,7 +148,7 @@ export const toProductNode = (productId: string | undefined, product: ProductCre
 
 	if('originCountryCode' in product) {
 		if(typeof product.originCountryCode === 'undefined') {
-			attrs.compliance_category = 'COUNTRY_ORIGIN_EXEMPT'
+			attrs['compliance_category'] = 'COUNTRY_ORIGIN_EXEMPT'
 		} else {
 			content.push({
 				tag: 'compliance_info',
@@ -159,7 +166,7 @@ export const toProductNode = (productId: string | undefined, product: ProductCre
 
 
 	if(typeof product.isHidden !== 'undefined') {
-		attrs.is_hidden = product.isHidden.toString()
+		attrs['is_hidden'] = product.isHidden.toString()
 	}
 
 	const node: BinaryNode = {
