@@ -18,6 +18,7 @@
   ],
   "scripts": {
     "test": "jest",
+    "start": "ts-node src/Services/index.ts",
     "prepare": "tsc",
     "build:all": "tsc && typedoc",
     "build:docs": "typedoc",
