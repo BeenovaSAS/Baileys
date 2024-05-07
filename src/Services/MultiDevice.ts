@@ -68,7 +68,17 @@ export const connectToWhatsApp = async (req: any, res: any) => {
             console.log(err);
           });
           break;
+        case 405:
+          console.log("🐛", "Conection error");
+          await closeSession(id);
+          connectToWhatsApp(req, res);
+          break;
+
         default:
+          console.log(
+            "🐸 DEFAULT ERROR",
+            (lastDisconnect?.error as Boom)?.output?.statusCode
+          );
           break;
       }
     }
