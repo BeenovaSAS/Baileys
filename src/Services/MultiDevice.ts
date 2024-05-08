@@ -1,11 +1,11 @@
-import { Boom } from "@hapi/boom";
 import axios from "axios";
 import * as fs from "fs";
 import makeWASocket, {
   DisconnectReason,
-  fetchLatestBaileysVersion,
   useMultiFileAuthState,
-} from "../index";
+} from "@whiskeysockets/baileys";
+import { Boom } from "@hapi/boom";
+
 import endpoint from "./endpoints.config";
 
 // the store maintains the data of the WA connection in memory
@@ -17,38 +17,29 @@ const conectionStatus: boolean[] = [];
 
 export const connectToWhatsApp = async (req: any, res: any) => {
   // fetch latest version of WA Web
-  const { version } = await fetchLatestBaileysVersion();
-
+  // const { version } = await fetchLatestBaileysVersion();
   const { id } = req.body;
-
   if (conectionStatus[id]) {
     return res.jsonp({ mensaje: "Sesión cargada", name: "whatsapp" });
   }
-
   let sendRes = false;
-
   const { state, saveCreds } = await useMultiFileAuthState(
     `../../sessions/auth_info_multi_${id}`
   );
-
   clients[id] = makeWASocket({
-    version,
     printQRInTerminal: true,
     auth: state,
-    syncFullHistory: false,
   });
-  clients[id].ev.on("creds.update", saveCreds);
 
+  clients[id].ev.on("creds.update", saveCreds);
   clients[id].ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update;
     if (connection === "close") {
       conectionStatus[id] = false;
-
       console.log(
         "Status code .....",
         (lastDisconnect?.error as Boom)?.output?.statusCode
       );
-
       switch ((lastDisconnect?.error as Boom)?.output?.statusCode) {
         case DisconnectReason.restartRequired:
           connectToWhatsApp(req, res);
@@ -62,7 +53,6 @@ export const connectToWhatsApp = async (req: any, res: any) => {
           console.log("Eliminando el archivo");
           await closeSession(id);
           connectToWhatsApp(req, res);
-
           break;
         case DisconnectReason.multideviceMismatch:
           axios({
@@ -78,23 +68,29 @@ export const connectToWhatsApp = async (req: any, res: any) => {
             console.log(err);
           });
           break;
+        case 405:
+          console.log("🐛", "Conection error");
+          await closeSession(id);
+          connectToWhatsApp(req, res);
+          break;
+
         default:
+          console.log(
+            "🐸 DEFAULT ERROR",
+            (lastDisconnect?.error as Boom)?.output?.statusCode
+          );
           break;
       }
     }
-
     if (connection === "open") {
       conectionStatus[id] = true;
-
       console.log(clients[id]);
-
       const body = {
         id,
         request: req.body,
         multi_device: true,
         user: { ...clients[id], multi_device: true },
       };
-
       axios({
         method: "POST",
         url: `${endpoint.URL_RESPONSE}/whatsapp/save`,
@@ -105,16 +101,18 @@ export const connectToWhatsApp = async (req: any, res: any) => {
       }).catch((err) => {
         console.log(err);
       });
-
       if (!sendRes) {
         sendRes = true;
-        res.jsonp({ mensaje: "Sesión cargada", name: "whatsapp" });
+        try {
+          res.jsonp({ mensaje: "Sesión cargada", name: "whatsapp" });
+        } catch (error) {}
       }
     }
-
     if (update?.qr && !sendRes) {
       sendRes = true;
-      res.jsonp({ status: 200, qr: update.qr });
+      try {
+        res.jsonp({ status: 200, qr: update.qr });
+      } catch (error) {}
     }
   });
   // listen for when the auth credentials is updated
