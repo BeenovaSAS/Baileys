@@ -3,6 +3,7 @@ import * as fs from "fs";
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
@@ -19,6 +20,7 @@ const conectionStatus: boolean[] = [];
 export const connectToWhatsApp = async (req: any, res: any) => {
   // fetch latest version of WA Web
   const { version } = await fetchLatestBaileysVersion();
+  console.log("🚀 WA VERSION", version);
   const { id } = req.body;
   if (conectionStatus[id]) {
     return res.jsonp({ mensaje: "Sesión cargada", name: "whatsapp" });
@@ -40,7 +42,8 @@ export const connectToWhatsApp = async (req: any, res: any) => {
       conectionStatus[id] = false;
       console.log(
         "Status code .....",
-        (lastDisconnect?.error as Boom)?.output?.statusCode
+        (lastDisconnect?.error as Boom)?.output?.statusCode,
+        id
       );
       switch ((lastDisconnect?.error as Boom)?.output?.statusCode) {
         case DisconnectReason.restartRequired:
@@ -71,7 +74,12 @@ export const connectToWhatsApp = async (req: any, res: any) => {
           });
           break;
         case 405:
-          console.log("🐛", "Conection error");
+          console.log(
+            "🐛",
+            "Conection error",
+            id,
+            (lastDisconnect?.error as Boom)?.output
+          );
           await closeSession(id);
           connectToWhatsApp(req, res);
           break;
@@ -159,6 +167,7 @@ export const sendFileMessage = async (req: any, res: any) => {
 };
 
 const closeSession = async (id) => {
+  console.log("🔒 Close sesion", id);
   try {
     fs.rmSync(`../../sessions/auth_info_multi_${id}`, {
       recursive: true,
