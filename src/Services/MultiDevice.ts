@@ -2,6 +2,7 @@ import axios from "axios";
 import * as fs from "fs";
 import makeWASocket, {
   DisconnectReason,
+  fetchLatestBaileysVersion,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
@@ -17,7 +18,7 @@ const conectionStatus: boolean[] = [];
 
 export const connectToWhatsApp = async (req: any, res: any) => {
   // fetch latest version of WA Web
-  // const { version } = await fetchLatestBaileysVersion();
+  const { version } = await fetchLatestBaileysVersion();
   const { id } = req.body;
   if (conectionStatus[id]) {
     return res.jsonp({ mensaje: "Sesión cargada", name: "whatsapp" });
@@ -29,6 +30,7 @@ export const connectToWhatsApp = async (req: any, res: any) => {
   clients[id] = makeWASocket({
     printQRInTerminal: true,
     auth: state,
+    version,
   });
 
   clients[id].ev.on("creds.update", saveCreds);
