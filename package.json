@@ -34,7 +34,7 @@
     "url": "git@github.com:adiwajshing/baileys.git"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.2",
+    "@whiskeysockets/baileys": "^6.7.18",
     "axios": "^0.24.0",
     "baileys": "^6.7.2",
     "body-parser": "^1.19.1",
